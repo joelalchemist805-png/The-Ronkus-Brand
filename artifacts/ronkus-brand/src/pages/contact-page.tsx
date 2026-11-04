@@ -2,17 +2,18 @@ import { useRef, useState, type FormEvent } from 'react';
 import { ArrowRight, Instagram, Mail, MapPin, MessageCircle, Send } from 'lucide-react';
 import { Link } from 'wouter';
 import { LogoBackdrop } from '@/components/logo-backdrop';
-import { categories } from '@/data/catalog';
 import { contactData } from '@/data/contact';
-import { getCategoryPath } from '@/lib/catalog';
+import { getCategoryPath, slugifyLabel } from '@/lib/catalog';
 import { buildWhatsAppUrl } from '@/lib/shop';
+import { useStoreSettings } from '@/lib/store-api';
 
 type ContactFieldErrors = {
   name?: string;
   message?: string;
+  whatsapp?: string;
 };
 
-function ContactComposer() {
+function ContactComposer({ whatsappNumber }: { whatsappNumber: string | null }) {
   const [name, setName] = useState('');
   const [topic, setTopic] = useState(contactData.contact.topics[0]);
   const [message, setMessage] = useState('');
@@ -35,6 +36,10 @@ function ContactComposer() {
       messageRef.current?.focus();
       return;
     }
+    if (!whatsappNumber) {
+      setErrors({ whatsapp: 'WhatsApp contact details are unavailable. Please try again later.' });
+      return;
+    }
 
     const whatsappMessage = [
       contactData.contact.whatsappMessageGreeting,
@@ -43,7 +48,7 @@ function ContactComposer() {
       `${contactData.contact.whatsappTopicLabel}: ${topic}`,
       `${contactData.contact.whatsappMessageLabel}: ${message.trim()}`,
     ].join('\n');
-    window.open(buildWhatsAppUrl(whatsappMessage), '_blank', 'noopener,noreferrer');
+    window.open(buildWhatsAppUrl(whatsappMessage, whatsappNumber), '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -102,12 +107,15 @@ function ContactComposer() {
         <button className="button-primary contact-submit" type="submit">
           <Send size={16} aria-hidden="true" /> {contactData.contact.submitButton}
         </button>
+        {errors.whatsapp && <p className="contact-field-error" role="alert">{errors.whatsapp}</p>}
       </form>
     </div>
   );
 }
 
 function ContactPage() {
+  const settings = useStoreSettings();
+  const whatsappNumber = settings.data?.whatsapp_number ?? null;
   const structuredData = JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'LocalBusiness',
@@ -129,20 +137,25 @@ function ContactPage() {
     <section className="backdrop-page contact-page">
       <LogoBackdrop density="high" />
       <div className="contact-page-content">
+        {settings.isError && (
+          <div className="store-query-error page-shell" role="alert">
+            <p>Store contact details could not be loaded.</p>
+            <button className="commerce-secondary-button" type="button" onClick={() => void settings.refetch()}>Try again</button>
+          </div>
+        )}
         <header className="contact-hero">
           <div className="contact-shell">
             <p className="eyebrow">{contactData.hero.eyebrow}</p>
             <h1>{contactData.hero.title}</h1>
             <p className="contact-hero-tagline">{contactData.hero.tagline}</p>
             <div className="contact-hero-actions">
-              <a
-                className="button-primary"
-                href={buildWhatsAppUrl(contactData.hero.whatsappMessage)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <MessageCircle size={16} aria-hidden="true" /> {contactData.hero.whatsappButton}
-              </a>
+              {whatsappNumber ? (
+                <a className="button-primary" href={buildWhatsAppUrl(contactData.hero.whatsappMessage, whatsappNumber)} target="_blank" rel="noopener noreferrer">
+                  <MessageCircle size={16} aria-hidden="true" /> {contactData.hero.whatsappButton}
+                </a>
+              ) : (
+                <button className="button-primary" type="button" disabled>{contactData.hero.whatsappButton}</button>
+              )}
               <a className="button-outline" href="#our-story">
                 {contactData.hero.storyButton} <ArrowRight size={16} aria-hidden="true" />
               </a>
@@ -183,12 +196,10 @@ function ContactPage() {
           </div>
           <div className="contact-category-grid">
             {contactData.categories.items.map((item, index) => {
-              const category = categories.find(({ name }) => name === item.categoryName);
-              if (!category) throw new Error(`Unknown contact page category: ${item.categoryName}`);
               return (
                 <Link
                   className="contact-category-card"
-                  href={getCategoryPath(category)}
+                  href={getCategoryPath({ slug: slugifyLabel(item.categoryName) })}
                   key={item.categoryName}
                 >
                   <span className="contact-card-number">0{index + 1}</span>
@@ -245,15 +256,12 @@ function ContactPage() {
                 <div className="contact-detail-icon"><MessageCircle size={19} aria-hidden="true" /></div>
                 <div className="contact-detail-copy">
                   <h3>{contactData.contact.whatsappLabel}</h3>
-                  <p>{contactData.contact.whatsappNumber}</p>
-                  <a
-                    className="contact-inline-link"
-                    href={buildWhatsAppUrl(contactData.contact.whatsappMessage)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {contactData.hero.whatsappButton} <ArrowRight size={14} aria-hidden="true" />
-                  </a>
+                  <p>{whatsappNumber ?? 'WhatsApp details temporarily unavailable'}</p>
+                  {whatsappNumber && (
+                    <a className="contact-inline-link" href={buildWhatsAppUrl(contactData.contact.whatsappMessage, whatsappNumber)} target="_blank" rel="noopener noreferrer">
+                      {contactData.hero.whatsappButton} <ArrowRight size={14} aria-hidden="true" />
+                    </a>
+                  )}
                 </div>
               </article>
               <article className="contact-detail-card">
@@ -290,7 +298,7 @@ function ContactPage() {
                 </div>
               )}
             </div>
-            <ContactComposer />
+            <ContactComposer whatsappNumber={whatsappNumber} />
           </div>
         </section>
 
@@ -298,14 +306,13 @@ function ContactPage() {
           <div className="contact-shell contact-final-cta-inner">
             <h2>{contactData.finalCta.heading}</h2>
             <div className="contact-final-cta-actions">
-              <a
-                className="button-light"
-                href={buildWhatsAppUrl(contactData.finalCta.whatsappMessage)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <MessageCircle size={16} aria-hidden="true" /> {contactData.finalCta.whatsappButton}
-              </a>
+              {whatsappNumber ? (
+                <a className="button-light" href={buildWhatsAppUrl(contactData.finalCta.whatsappMessage, whatsappNumber)} target="_blank" rel="noopener noreferrer">
+                  <MessageCircle size={16} aria-hidden="true" /> {contactData.finalCta.whatsappButton}
+                </a>
+              ) : (
+                <button className="button-light" type="button" disabled>{contactData.finalCta.whatsappButton}</button>
+              )}
               <Link className="button-outline contact-final-shop-link" href="/shop">
                 {contactData.finalCta.shopButton} <ArrowRight size={16} aria-hidden="true" />
               </Link>

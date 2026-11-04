@@ -2,12 +2,15 @@ import { ArrowDown, ArrowRight, Check, Clock3, MessageCircle } from 'lucide-reac
 import { LogoBackdrop } from '@/components/logo-backdrop';
 import { academyData } from '@/data/academy';
 import { formatNaira, buildWhatsAppUrl } from '@/lib/shop';
+import { useStoreSettings } from '@/lib/store-api';
 
-function academyEnquiryUrl(message: string): string {
-  return buildWhatsAppUrl(`${academyData.whatsappMessagePrefix}${message}`);
+function academyEnquiryUrl(message: string, whatsappNumber: string): string {
+  return buildWhatsAppUrl(`${academyData.whatsappMessagePrefix}${message}`, whatsappNumber);
 }
 
 function AcademyPage() {
+  const settings = useStoreSettings();
+  const whatsappNumber = settings.data?.whatsapp_number;
   const isAdmissionOpen = academyData.admissionStatus === 'open';
   const primaryLabel = isAdmissionOpen
     ? academyData.enquireButton
@@ -37,6 +40,12 @@ function AcademyPage() {
     <section className="backdrop-page academy-page">
       <LogoBackdrop density="high" />
       <div className="academy-page-content">
+        {settings.isError && (
+          <div className="store-query-error page-shell" role="alert">
+            <p>Store contact details could not be loaded.</p>
+            <button className="commerce-secondary-button" type="button" onClick={() => void settings.refetch()}>Try again</button>
+          </div>
+        )}
         <header className="academy-hero">
           <div className="page-shell academy-hero-inner">
             <p className="eyebrow">{academyData.heroEyebrow}</p>
@@ -49,14 +58,13 @@ function AcademyPage() {
             </div>
             <p className="academy-hero-intro">{academyData.intro}</p>
             <div className="academy-hero-actions">
-              <a
-                className="button-primary"
-                href={academyEnquiryUrl(primaryMessage)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <MessageCircle size={16} /> {primaryLabel}
-              </a>
+              {whatsappNumber ? (
+                <a className="button-primary" href={academyEnquiryUrl(primaryMessage, whatsappNumber)} target="_blank" rel="noopener noreferrer">
+                  <MessageCircle size={16} /> {primaryLabel}
+                </a>
+              ) : (
+                <button className="button-primary" type="button" disabled>{primaryLabel}</button>
+              )}
               <a className="button-outline" href="#academy-programmes">
                 {academyData.viewProgrammesButton} <ArrowDown size={16} />
               </a>
@@ -97,19 +105,24 @@ function AcademyPage() {
                   </p>
                   <p className="academy-programme-price">{formatNaira(programme.price)}</p>
                   <h3>{programme.subtitle}</h3>
-                  <a
-                    className="button-primary"
-                    href={academyEnquiryUrl(
-                      academyData.programmeEnquiryMessageTemplate.replace(
-                        '{durationMonths}',
-                        `${programme.durationMonths}${academyData.programmeEnquiryDurationSuffix}`,
-                      ),
-                    )}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <MessageCircle size={16} /> {academyData.programmeEnquireButton}
-                  </a>
+                  {whatsappNumber ? (
+                    <a
+                      className="button-primary"
+                      href={academyEnquiryUrl(
+                        academyData.programmeEnquiryMessageTemplate.replace(
+                          '{durationMonths}',
+                          `${programme.durationMonths}${academyData.programmeEnquiryDurationSuffix}`,
+                        ),
+                        whatsappNumber,
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <MessageCircle size={16} /> {academyData.programmeEnquireButton}
+                    </a>
+                  ) : (
+                    <button className="button-primary" type="button" disabled>{academyData.programmeEnquireButton}</button>
+                  )}
                 </article>
               ))}
             </div>
@@ -175,14 +188,13 @@ function AcademyPage() {
               <p className="eyebrow">{academyData.finalEyebrow}</p>
               <h2>{academyData.finalHeading}</h2>
             </div>
-            <a
-              className="button-primary"
-              href={academyEnquiryUrl(primaryMessage)}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <MessageCircle size={16} /> {primaryLabel} <ArrowRight size={16} />
-            </a>
+            {whatsappNumber ? (
+              <a className="button-primary" href={academyEnquiryUrl(primaryMessage, whatsappNumber)} target="_blank" rel="noopener noreferrer">
+                <MessageCircle size={16} /> {primaryLabel} <ArrowRight size={16} />
+              </a>
+            ) : (
+              <button className="button-primary" type="button" disabled>{primaryLabel}</button>
+            )}
           </div>
         </section>
       </div>

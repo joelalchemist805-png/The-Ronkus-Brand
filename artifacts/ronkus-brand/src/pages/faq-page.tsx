@@ -3,6 +3,7 @@ import { MessageCircle } from 'lucide-react';
 import { faqItems, type FaqGroup } from '@/data/faq';
 import { LogoBackdrop } from '@/components/logo-backdrop';
 import { buildWhatsAppUrl } from '@/lib/shop';
+import { useStoreSettings } from '@/lib/store-api';
 
 const faqGroups: FaqGroup[] = [
   'ORDERING',
@@ -63,6 +64,7 @@ function FaqAccordion() {
 }
 
 export function FaqPage() {
+  const settings = useStoreSettings();
   const structuredData = JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'FAQPage',
@@ -94,14 +96,25 @@ export function FaqPage() {
               <p className="eyebrow">We are happy to help</p>
               <h2>Still have a question?</h2>
             </div>
-            <a
-              className="button-primary"
-              href={buildWhatsAppUrl('Hello The Ronkus Brand, I have a question.')}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <MessageCircle size={16} /> Chat with us on WhatsApp
-            </a>
+            {settings.data?.whatsapp_number ? (
+              <a
+                className="button-primary"
+                href={buildWhatsAppUrl('Hello The Ronkus Brand, I have a question.', settings.data.whatsapp_number)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <MessageCircle size={16} /> Chat with us on WhatsApp
+              </a>
+            ) : (
+              <button
+                className="button-primary"
+                type="button"
+                disabled={!settings.isError}
+                onClick={() => void settings.refetch()}
+              >
+                {settings.isError ? 'Retry WhatsApp contact' : 'Loading WhatsApp contact'}
+              </button>
+            )}
           </div>
         </section>
       </div>

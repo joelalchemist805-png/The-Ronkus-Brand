@@ -5,27 +5,15 @@ import {
   ArrowRight,
   Instagram,
   Search,
+  X,
 } from 'lucide-react';
-import {
-  categories,
-  communityImages,
-  testimonialImages,
-  type Product,
-} from '@/data/catalog';
-import { featuredProductsDataSource } from '@/data/featured-products';
-import { CustomizeItemDialog } from '@/components/customize-item-dialog';
+import { communityImages, testimonialImages } from '@/data/brand-images';
+import { ProductCard } from '@/components/product-card';
 import { HomeAnchorLink } from '@/components/site-layout';
-import { useShop } from '@/components/shop-provider';
 import { getCategoryPath } from '@/lib/catalog';
 import { Link } from 'wouter';
-import {
-  createCartItemDraft,
-  filterProducts,
-  formatNaira,
-  getSelectedPrice,
-  type CustomizationDetails,
-  type ProductSelection,
-} from '@/lib/shop';
+import { filterProducts } from '@/lib/shop';
+import { useCategories, useFeaturedProducts } from '@/lib/store-api';
 
 const instagramUrl = 'https://instagram.com/the_ronkus_brand?dlrf=MTBzaDJjY3dybGhlOA%3D%3D';
 const facebookUrl = 'https://www.facebook.com/share/14sWXoMEgGM/';
@@ -88,198 +76,47 @@ function SectionHeading({
 }
 
 function CategorySection() {
+  const query = useCategories();
+
   return (
     <section className="category-section page-shell" id="categories">
       <div className="category-heading-row">
         <SectionHeading eyebrow="Find your finishing touch" title="Shop by Category" />
         <p className="category-note">Pieces for the way you move, make and show up.</p>
       </div>
-      <div className="category-grid">
-        {categories.map((category, index) => (
+      {query.isPending && (
+        <div className="category-grid" aria-label="Loading categories">
+          {Array.from({ length: 6 }, (_, index) => <div className="category-card-skeleton" key={index} />)}
+        </div>
+      )}
+      {query.isError && (
+        <div className="store-query-error" role="alert">
+          <p>We could not load categories.</p>
+          <button className="commerce-primary-button" type="button" onClick={() => void query.refetch()}>Try again</button>
+        </div>
+      )}
+      {query.data?.length === 0 && <p className="category-empty-state">Collections are being prepared.</p>}
+      {query.data && query.data.length > 0 && <div className="category-grid">
+        {query.data.map((category, index) => (
           <Link
             className={`category-card category-card-${index + 1}`}
             href={getCategoryPath(category)}
-            key={category.name}
+            key={category.id}
           >
-            <img src={category.image} alt="" width="640" height="480" loading="lazy" decoding="async" />
+            <img src={category.image_path} alt="" width="640" height="480" loading="lazy" decoding="async" />
             <span className="category-shade" />
             <span className="category-card-content">
-              <span className="category-number">0{index + 1}</span>
+              <span className="category-number">{String(index + 1).padStart(2, '0')}</span>
               <strong>{category.name}</strong>
               <span className="category-subcategories">
-                {category.subcategories.slice(0, 3).join(' · ')}
+                {category.subcategories.slice(0, 3).map(({ name }) => name).join(' · ')}
               </span>
             </span>
             <span className="category-arrow" aria-hidden="true"><ArrowRight size={18} /></span>
           </Link>
         ))}
-      </div>
+      </div>}
     </section>
-  );
-}
-
-function ProductSelectors({
-  product,
-  selection,
-  onChange,
-}: {
-  product: Product;
-  selection: ProductSelection;
-  onChange: (selection: ProductSelection) => void;
-}) {
-  const selectedPrice = getSelectedPrice(product, selection);
-
-  return (
-    <div className="product-options">
-      {product.options.sizes && (
-        <fieldset className="selector-group">
-          <legend>Size <span>{selection.size ? `· ${selection.size}` : '· Choose one'}</span></legend>
-          <div className="size-options">
-            {product.options.sizes.map((size) => (
-              <button
-                className={selection.size === size ? 'size-choice selected' : 'size-choice'}
-                type="button"
-                key={size}
-                aria-pressed={selection.size === size}
-                onClick={() => onChange({ ...selection, size })}
-              >
-                {size}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-      )}
-      {product.options.yardage && (
-        <label className="selector-group yardage-select">
-          <span>Yardage</span>
-          <select
-            value={selection.yardage ?? ''}
-            onChange={(event) => onChange({ ...selection, yardage: event.target.value })}
-            required
-          >
-            <option value="">Choose yardage</option>
-            {product.options.yardage.map((option) => (
-              <option value={option.label} key={option.label}>
-                {option.label} — {formatNaira(option.price)}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {product.options.colors && (
-        <fieldset className="selector-group">
-          <legend>Colour <span>{selection.color ? `· ${selection.color}` : '· Choose one'}</span></legend>
-          <div className="color-options">
-            {product.options.colors.map((option) => (
-              <button
-                className={`color-choice color-${option.toLowerCase()} ${selection.color === option ? 'selected' : ''}`}
-                type="button"
-                key={option}
-                aria-label={`Select ${option} colour`}
-                aria-pressed={selection.color === option}
-                onClick={() => onChange({ ...selection, color: option })}
-              />
-            ))}
-          </div>
-        </fieldset>
-      )}
-      <div className="product-price-row">
-        <span className="product-price">{selectedPrice === undefined ? 'Choose yardage' : formatNaira(selectedPrice)}</span>
-        {selection.yardage && <span className="price-unit">for {selection.yardage}</span>}
-      </div>
-    </div>
-  );
-}
-
-export function ProductCard({
-  product,
-  index,
-  onCustomize,
-}: {
-  product: Product;
-  index: number;
-  onCustomize: (product: Product, color: string) => void;
-}) {
-  const { addItem } = useShop();
-  const [selection, setSelection] = useState<ProductSelection>({});
-  const [added, setAdded] = useState(false);
-  const selectedPrice = getSelectedPrice(product, selection);
-  const needsSize = Boolean(product.options.sizes && !selection.size);
-  const needsColor = Boolean(product.options.colors && !selection.color);
-  const needsYardage = Boolean(product.options.yardage && !selection.yardage);
-  const canAdd = !needsSize && !needsColor && !needsYardage;
-  const customizable = Boolean(product.customization?.enabled);
-
-  const updateSelection = (nextSelection: ProductSelection) => {
-    setSelection(nextSelection);
-    setAdded(false);
-  };
-
-  const handleAdd = () => {
-    if (!canAdd) return;
-    addItem(createCartItemDraft(product, selection));
-    setAdded(true);
-  };
-
-  const handleCustomize = () => {
-    if (!canAdd || !customizable || !selection.color) return;
-    onCustomize(product, selection.color);
-  };
-
-  const buttonLabel = !canAdd
-    ? `Choose ${needsSize ? 'size' : needsColor ? 'colour' : 'yardage'} to add`
-    : `${added ? 'Add one more' : 'Add to Cart'} · ${formatNaira(selectedPrice ?? product.price)}`;
-
-  return (
-    <article
-      className="product-card"
-      id={product.customization?.enabled ? 'product-customize' : `product-${product.id}`}
-    >
-      <div className="product-image-wrap">
-        <img
-          src={product.image}
-          alt={product.name}
-          width="640"
-          height="640"
-          loading="lazy"
-          decoding="async"
-        />
-        {product.availability && <span className="product-badge">{product.availability}</span>}
-        <span className="product-index">0{index + 1}</span>
-      </div>
-      <div className="product-card-body">
-        <div className="product-title-row">
-          <div>
-            <p className="product-category">{product.category}</p>
-            <h3>{product.name}</h3>
-          </div>
-        </div>
-        <p className="product-description">{product.description}</p>
-        <ProductSelectors product={product} selection={selection} onChange={updateSelection} />
-        <div className="product-action-group">
-          <button
-            className="product-action-button"
-            type="button"
-            disabled={!canAdd}
-            onClick={handleAdd}
-          >
-            {buttonLabel}
-          </button>
-          {customizable && (
-            <button
-              className="product-action-button product-action-secondary"
-              type="button"
-              disabled={!canAdd}
-              onClick={handleCustomize}
-            >
-              {needsColor ? 'Choose a colour to customize' : 'Customize Your Item'}
-              <ArrowRight size={15} aria-hidden="true" />
-            </button>
-          )}
-        </div>
-        {added && <p className="product-added-note" role="status">Added to your shopping bag.</p>}
-      </div>
-    </article>
   );
 }
 
@@ -288,17 +125,39 @@ function ProductSection({
   onCategoryChange,
   searchText,
   onSearchChange,
-  onCustomize,
 }: {
   activeCategory: string;
   onCategoryChange: (category: string) => void;
   searchText: string;
   onSearchChange: (query: string) => void;
-  onCustomize: (product: Product, color: string) => void;
 }) {
-  const featuredProducts = featuredProductsDataSource.listFeaturedProducts();
+  const featuredQuery = useFeaturedProducts();
+  const categoriesQuery = useCategories();
+  if (featuredQuery.isPending) {
+    return (
+      <section className="product-section" id="products">
+        <div className="page-shell">
+          <SectionHeading eyebrow="Considered details, everyday character" title="Featured Products" intro="A few favourites from our world of personal, expressive style." />
+          <div className="product-grid product-grid-skeleton" aria-label="Loading featured products">
+            {Array.from({ length: 3 }, (_, index) => <div className="product-card-skeleton" key={index} />)}
+          </div>
+        </div>
+      </section>
+    );
+  }
+  if (featuredQuery.isError) {
+    return (
+      <section className="product-section" id="products">
+        <div className="page-shell store-query-error" role="alert">
+          <p>We could not load featured products.</p>
+          <button className="commerce-primary-button" type="button" onClick={() => void featuredQuery.refetch()}>Try again</button>
+        </div>
+      </section>
+    );
+  }
+  const featuredProducts = featuredQuery.data;
+  if (featuredProducts.length === 0) return null;
   const filteredProducts = filterProducts(featuredProducts, searchText, activeCategory);
-  const hasFilter = Boolean(searchText.trim()) || activeCategory !== 'All categories';
 
   return (
     <section className="product-section" id="products">
@@ -309,11 +168,7 @@ function ProductSection({
             title="Featured Products"
             intro="A few favourites from our world of personal, expressive style."
           />
-          <span className="featured-count">
-            {filteredProducts.length === featuredProducts.length
-              ? `01 — ${String(featuredProducts.length).padStart(2, '0')}`
-              : `${filteredProducts.length} OF ${featuredProducts.length}`}
-          </span>
+          <span className="featured-count">{filteredProducts.length} OF {featuredProducts.length}</span>
         </div>
         <div className="product-controls">
           <label className="product-search">
@@ -334,36 +189,34 @@ function ProductSection({
           <label className="product-category-filter">
             <span>Category</span>
             <select value={activeCategory} onChange={(event) => onCategoryChange(event.target.value)}>
-              <option>All categories</option>
-              {categories.map((category) => <option key={category.name}>{category.name}</option>)}
+              <option value="all">All categories</option>
+              {categoriesQuery.data?.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
             </select>
           </label>
         </div>
+        {categoriesQuery.isError && (
+          <div className="store-query-error" role="alert">
+            <p>Category filters could not be loaded.</p>
+            <button className="commerce-secondary-button" type="button" onClick={() => void categoriesQuery.refetch()}>Try again</button>
+          </div>
+        )}
         {filteredProducts.length > 0 ? (
           <div className="product-grid">
-            {filteredProducts.map((product, index) => (
-              <ProductCard key={product.id} product={product} index={index} onCustomize={onCustomize} />
-            ))}
+            {filteredProducts.map((product, index) => <ProductCard key={product.id} product={product} index={index} />)}
           </div>
         ) : (
           <div className="products-empty-state">
-            <p className="eyebrow">{activeCategory === 'All categories' ? 'No matches yet' : activeCategory}</p>
-            <h3>
-              {activeCategory === 'All categories'
-                ? `No products match “${searchText.trim()}”.`
-                : `No products are currently listed in ${activeCategory}.`}
-            </h3>
+            <p className="eyebrow">No matches yet</p>
+            <h3>{`No featured products match “${searchText.trim()}”.`}</h3>
             <p>
-              {activeCategory === 'All categories'
-                ? 'Try another search, or clear the search to see the featured collection.'
-                : 'Browse the configured featured products or contact us for help with this collection.'}
+              Try another search, or clear the category filter to see the featured collection.
             </p>
             <button
               className="commerce-secondary-button"
               type="button"
               onClick={() => {
                 onSearchChange('');
-                onCategoryChange('All categories');
+                onCategoryChange('all');
               }}
             >
               View all featured products
@@ -510,21 +363,8 @@ function AcademySection() {
 }
 
 export default function Homepage() {
-  const { addItem, setCartOpen } = useShop();
-  const [activeCategory, setActiveCategory] = useState('All categories');
+  const [activeCategory, setActiveCategory] = useState('all');
   const [searchText, setSearchText] = useState('');
-  const [customizeTarget, setCustomizeTarget] = useState<{ product: Product; color: string } | null>(null);
-
-  const addCustomizedItem = (customization: CustomizationDetails) => {
-    if (!customizeTarget) return;
-    addItem(createCartItemDraft(
-      customizeTarget.product,
-      { color: customizeTarget.color },
-      customization,
-    ));
-    setCustomizeTarget(null);
-    setCartOpen(true);
-  };
 
   return (
     <>
@@ -535,18 +375,11 @@ export default function Homepage() {
         onCategoryChange={setActiveCategory}
         searchText={searchText}
         onSearchChange={setSearchText}
-        onCustomize={(product, color) => setCustomizeTarget({ product, color })}
       />
       <CraftsmanshipSection />
       <TestimonialsSection />
       <CommunitySection />
       <AcademySection />
-      <CustomizeItemDialog
-        product={customizeTarget?.product ?? null}
-        selectedColor={customizeTarget?.color}
-        onClose={() => setCustomizeTarget(null)}
-        onAddToCart={addCustomizedItem}
-      />
     </>
   );
 }

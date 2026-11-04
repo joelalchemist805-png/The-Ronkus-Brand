@@ -1,4 +1,4 @@
-import { categories, type Category } from '../data/catalog.ts';
+import type { CategoryRow, CategoryWithSubcategories } from '@/lib/db-types';
 
 export function slugifyLabel(label: string): string {
   return label
@@ -9,18 +9,27 @@ export function slugifyLabel(label: string): string {
     .replace(/^-|-$/g, '');
 }
 
-export function findCategoryBySlug(slug: string): Category | undefined {
-  return categories.find((category) => slugifyLabel(category.name) === slug);
+export function findCategoryBySlug(
+  categories: CategoryWithSubcategories[],
+  slug: string,
+): CategoryWithSubcategories | undefined {
+  return categories.find((category) => category.slug === slug);
 }
 
-export function findSubcategoryBySlug(category: Category, slug: string): string | undefined {
-  return category.subcategories.find((subcategory) => slugifyLabel(subcategory) === slug);
+export function findSubcategoryBySlug(
+  category: CategoryWithSubcategories,
+  slug: string,
+) {
+  return category.subcategories.find((subcategory) => subcategory.slug === slug);
 }
 
-export function getCategoryPath(category: Category): string {
-  return `/shop/${slugifyLabel(category.name)}`;
+export function getCategoryPath(category: Pick<CategoryRow, 'slug'>): string {
+  return `/shop/${category.slug}`;
 }
 
-export function getSubcategoryPath(category: Category, subcategory: string): string {
-  return `${getCategoryPath(category)}/${slugifyLabel(subcategory)}`;
+export function getSubcategoryPath(
+  category: Pick<CategoryRow, 'slug'>,
+  subcategory: { slug: string },
+): string {
+  return `${getCategoryPath(category)}/${subcategory.slug}`;
 }

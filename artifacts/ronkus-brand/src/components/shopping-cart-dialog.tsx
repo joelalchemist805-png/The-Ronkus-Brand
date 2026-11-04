@@ -15,6 +15,8 @@ import {
   getCartSubtotal,
   type CheckoutCustomer,
 } from '@/lib/shop';
+import { useStoreSettings } from '@/lib/store-api';
+import { Link } from 'wouter';
 
 const emptyCustomer: CheckoutCustomer = { name: '', phone: '', address: '' };
 
@@ -28,6 +30,7 @@ export function ShoppingCartDialog() {
     setQuantity,
     removeItem,
   } = useShop();
+  const settings = useStoreSettings();
   const [checkout, setCheckout] = useState(false);
   const [customer, setCustomer] = useState(emptyCustomer);
   const [validationMessage, setValidationMessage] = useState('');
@@ -60,7 +63,12 @@ export function ShoppingCartDialog() {
 
     const orderTotal = getCartSubtotal(items);
     const message = buildWhatsAppMessage(customer, items, orderTotal);
-    const url = buildWhatsAppUrl(message);
+    const whatsappNumber = settings.data?.whatsapp_number;
+    if (!whatsappNumber) {
+      setValidationMessage('The store WhatsApp number is unavailable. Please try again later.');
+      return;
+    }
+    const url = buildWhatsAppUrl(message, whatsappNumber);
     const whatsappLink = document.createElement('a');
     whatsappLink.href = url;
     whatsappLink.target = '_blank';
@@ -101,7 +109,7 @@ export function ShoppingCartDialog() {
           <div className="empty-cart-state">
             <span className="empty-cart-icon"><ShoppingBag size={25} /></span>
             <h3>Your bag is waiting</h3>
-            <p>Explore the featured collection and add a piece that feels like you.</p>
+            <p>Explore the shop and add a piece that feels like you.</p>
             <button
               className="commerce-primary-button"
               type="button"
@@ -117,12 +125,16 @@ export function ShoppingCartDialog() {
             <div className="cart-item-list" aria-label="Items in your cart">
               {items.map((item) => (
                 <article className="cart-item" key={item.key}>
-                  <img src={item.image} alt="" width="104" height="124" loading="lazy" decoding="async" />
+                  {item.image ? (
+                    <img src={item.image} alt="" width="104" height="124" loading="lazy" decoding="async" />
+                  ) : (
+                    <div className="cart-item-placeholder" aria-hidden="true" />
+                  )}
                   <div className="cart-item-main">
                     <div className="cart-item-heading">
                       <div>
-                        <span className="cart-item-category">{item.category}</span>
-                        <h3>{item.name}</h3>
+                        <span className="cart-item-category">The Ronkus Brand</span>
+                        <h3><Link href={`/product/${item.slug}`}>{item.name}</Link></h3>
                       </div>
                       <button
                         className="cart-remove-button"
@@ -134,23 +146,31 @@ export function ShoppingCartDialog() {
                       </button>
                     </div>
                     <div className="cart-item-options">
-                      {item.options.size && <span>Size: {item.options.size}</span>}
-                      {item.options.color && <span>Colour: {item.options.color}</span>}
-                      {item.options.yardage && <span>{item.options.yardage}</span>}
-                      {item.options.customization && (
+                      {Object.entries(item.selected_options).map(([label, selection]) => (
+                        <span key={label}>
+                          {label}: {Array.isArray(selection) ? selection.join(', ') : selection}
+                        </span>
+                      ))}
+                      {item.custom_request && (
                         <>
-                          <span>Customization: {item.options.customization.type}</span>
-                          <span>Instructions: {item.options.customization.instructions}</span>
-                          <span>Fee: {formatNaira(item.options.customization.fee)} per item</span>
+                          {item.custom_request.answers.map((answer) => (
+                            <span key={answer.id}>
+                              {answer.label}: {answer.value}{answer.unit ? ` ${answer.unit}` : ''}
+                            </span>
+                          ))}
+                          {item.custom_request.fee_ngn > 0 && (
+                            <span>Custom request fee: {formatNaira(item.custom_request.fee_ngn)} per unit</span>
+                          )}
                         </>
                       )}
+                      {item.needed_by && <span>Needed by: {item.needed_by}</span>}
                     </div>
                     <div className="cart-item-bottom">
                       <div className="quantity-control" aria-label={`Quantity for ${item.name}`}>
                         <button
                           type="button"
                           aria-label={`Decrease ${item.name} quantity`}
-                          disabled={item.quantity <= 1}
+                          disabled={item.quantity <= item.min_order_qty}
                           onClick={() => setQuantity(item.key, item.quantity - 1)}
                         >
                           <Minus size={14} />
@@ -159,14 +179,15 @@ export function ShoppingCartDialog() {
                         <button
                           type="button"
                           aria-label={`Increase ${item.name} quantity`}
+                          disabled={item.max_order_qty !== null && item.quantity >= item.max_order_qty}
                           onClick={() => setQuantity(item.key, item.quantity + 1)}
                         >
                           <Plus size={14} />
                         </button>
                       </div>
                       <div className="cart-item-pricing">
-                        <span>{formatNaira(item.unitPrice)} each</span>
-                        <strong>{formatNaira(item.unitPrice * item.quantity)}</strong>
+                        <span>{formatNaira(item.display_unit_price)} each</span>
+                        <strong>{formatNaira(item.display_unit_price * item.quantity)}</strong>
                       </div>
                     </div>
                   </div>
@@ -194,7 +215,7 @@ export function ShoppingCartDialog() {
               {items.map((item) => (
                 <div className="checkout-summary-line" key={item.key}>
                   <span>{item.name} × {item.quantity}</span>
-                  <strong>{formatNaira(item.unitPrice * item.quantity)}</strong>
+                  <strong>{formatNaira(item.display_unit_price * item.quantity)}</strong>
                 </div>
               ))}
               <div className="checkout-summary-total">
@@ -240,6 +261,11 @@ export function ShoppingCartDialog() {
               <button className="commerce-primary-button whatsapp-checkout-button" type="submit">
                 <MessageCircle size={18} /> Checkout via WhatsApp
               </button>
+              {settings.isError && (
+                <button className="commerce-secondary-button" type="button" onClick={() => void settings.refetch()}>
+                  Retry loading store contact
+                </button>
+              )}
               <p className="checkout-note">
                 Your cart will stay saved while you confirm your order with us.
               </p>

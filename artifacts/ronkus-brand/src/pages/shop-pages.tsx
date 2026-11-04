@@ -1,35 +1,39 @@
-import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, MessageCircle } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { Link } from 'wouter';
-import { categories, type Category, type Product } from '@/data/catalog';
-import { CustomizeItemDialog } from '@/components/customize-item-dialog';
 import { LogoBackdrop } from '@/components/logo-backdrop';
-import { ProductCard } from '@/components/homepage';
-import { featuredProductsDataSource } from '@/data/featured-products';
-import { filterProducts, buildWhatsAppUrl, createCartItemDraft, type CustomizationDetails } from '@/lib/shop';
-import {
-  findCategoryBySlug,
-  findSubcategoryBySlug,
-  getCategoryPath,
-  getSubcategoryPath,
-} from '@/lib/catalog';
-import { useShop } from '@/components/shop-provider';
+import { ProductCard } from '@/components/product-card';
+import { useCategories, useProducts } from '@/lib/store-api';
+import type { CategoryWithSubcategories } from '@/lib/db-types';
+import { getCategoryPath, getSubcategoryPath } from '@/lib/catalog';
+import NotFound from '@/pages/not-found';
 
-function CategoryCards() {
+function QueryError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="store-query-error page-shell" role="alert">
+      <p>We could not load the shop right now.</p>
+      <button className="commerce-primary-button" type="button" onClick={onRetry}>Try again</button>
+    </div>
+  );
+}
+
+function CategoryCards({ categories }: { categories: CategoryWithSubcategories[] }) {
   return (
     <div className="category-grid">
       {categories.map((category, index) => (
         <Link
           className={`category-card category-card-${index + 1}`}
           href={getCategoryPath(category)}
-          key={category.name}
+          key={category.id}
         >
-          <img src={category.image} alt="" width="640" height="480" loading="lazy" decoding="async" />
+          <img src={category.image_path} alt="" width="640" height="480" loading="lazy" decoding="async" />
           <span className="category-shade" />
           <span className="category-card-content">
-            <span className="category-number">0{index + 1}</span>
+            <span className="category-number">{String(index + 1).padStart(2, '0')}</span>
             <strong>{category.name}</strong>
-            <span className="category-subcategories">{category.subcategories.slice(0, 3).join(' · ')}</span>
+            <span className="category-subcategories">
+              {category.subcategories.slice(0, 3).map(({ name }) => name).join(' · ')}
+            </span>
           </span>
           <span className="category-arrow" aria-hidden="true"><ArrowRight size={18} /></span>
         </Link>
@@ -38,7 +42,19 @@ function CategoryCards() {
   );
 }
 
+function CategoryCardsSkeleton() {
+  return (
+    <div className="category-grid" aria-label="Loading categories">
+      {Array.from({ length: 6 }, (_, index) => (
+        <div className="category-card-skeleton" key={index} />
+      ))}
+    </div>
+  );
+}
+
 export function ShopOverviewPage() {
+  const query = useCategories();
+
   return (
     <section className="backdrop-page shop-overview-page">
       <LogoBackdrop density="medium" />
@@ -46,7 +62,12 @@ export function ShopOverviewPage() {
         <p className="eyebrow">Explore The Ronkus Brand</p>
         <h1 className="section-title">Shop by Category</h1>
         <p className="section-intro">Pieces for the way you move, make and show up.</p>
-        <CategoryCards />
+        {query.isPending && <CategoryCardsSkeleton />}
+        {query.isError && <QueryError onRetry={() => void query.refetch()} />}
+        {query.data?.length === 0 && (
+          <div className="category-empty-state"><h2>Collections are being prepared.</h2></div>
+        )}
+        {query.data && query.data.length > 0 && <CategoryCards categories={query.data} />}
       </div>
     </section>
   );
@@ -56,14 +77,11 @@ function SubcategorySlider({
   category,
   activeSubcategory,
 }: {
-  category: Category;
+  category: CategoryWithSubcategories;
   activeSubcategory?: string;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const activeChipRef = useRef<HTMLAnchorElement>(null);
-  const activePath = activeSubcategory
-    ? getSubcategoryPath(category, activeSubcategory)
-    : getCategoryPath(category);
 
   useEffect(() => {
     activeChipRef.current?.scrollIntoView({
@@ -71,21 +89,21 @@ function SubcategorySlider({
       block: 'nearest',
       inline: 'center',
     });
-  }, [activePath]);
+  }, [activeSubcategory]);
 
   const scroll = (direction: -1 | 1) => {
-    trackRef.current?.scrollBy({
-      left: direction * Math.max(trackRef.current.clientWidth * 0.7, 180),
+    const track = trackRef.current;
+    track?.scrollBy({
+      left: direction * Math.max(track.clientWidth * 0.7, 180),
       behavior: 'smooth',
     });
   };
-
   const chips = [
     { name: 'All', href: getCategoryPath(category), active: !activeSubcategory },
     ...category.subcategories.map((subcategory) => ({
-      name: subcategory,
+      name: subcategory.name,
       href: getSubcategoryPath(category, subcategory),
-      active: activeSubcategory === subcategory,
+      active: activeSubcategory === subcategory.slug,
     })),
   ];
 
@@ -115,71 +133,96 @@ function SubcategorySlider({
   );
 }
 
+function ProductGridSkeleton() {
+  return (
+    <div className="category-product-grid" aria-label="Loading products">
+      {Array.from({ length: 3 }, (_, index) => <div className="product-card-skeleton" key={index} />)}
+    </div>
+  );
+}
+
 function CategoryProducts({
   category,
-  subcategory,
+  subcategorySlug,
 }: {
-  category: Category;
-  subcategory?: string;
+  category: CategoryWithSubcategories;
+  subcategorySlug?: string;
 }) {
-  const { addItem, setCartOpen } = useShop();
-  const [customizeTarget, setCustomizeTarget] = useState<{ product: Product; color: string } | null>(null);
-  const inventory = featuredProductsDataSource.listFeaturedProducts();
-  const categoryProducts = filterProducts(inventory, '', category.name);
-  const filteredProducts = subcategory
-    ? filterProducts(categoryProducts, subcategory, category.name)
-    : categoryProducts;
+  const query = useProducts({ categorySlug: category.slug, subcategorySlug });
 
-  const addCustomizedItem = (customization: CustomizationDetails) => {
-    if (!customizeTarget) return;
-    addItem(createCartItemDraft(
-      customizeTarget.product,
-      { color: customizeTarget.color },
-      customization,
-    ));
-    setCustomizeTarget(null);
-    setCartOpen(true);
-  };
+  if (query.isPending) return <ProductGridSkeleton />;
+  if (query.isError) {
+    return (
+      <div className="store-query-error" role="alert">
+        <p>We could not load these products.</p>
+        <button className="commerce-primary-button" type="button" onClick={() => void query.refetch()}>Try again</button>
+      </div>
+    );
+  }
+  if (query.data.length === 0) {
+    return (
+      <div className="category-empty-state">
+        <p className="eyebrow">Made with intention</p>
+        <h2>New pieces arriving soon</h2>
+        <p>
+          {subcategorySlug
+            ? `We are adding new pieces to ${category.subcategories.find(({ slug }) => slug === subcategorySlug)?.name}.`
+            : `We are preparing more ${category.name.toLowerCase()} for you.`}
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="category-product-grid">
+      {query.data.map((product, index) => <ProductCard key={product.id} product={product} index={index} />)}
+    </div>
+  );
+}
+
+function CategoryPageContent({
+  category,
+  subcategorySlug,
+}: {
+  category: CategoryWithSubcategories;
+  subcategorySlug?: string;
+}) {
+  const subcategory = subcategorySlug
+    ? category.subcategories.find(({ slug }) => slug === subcategorySlug)
+    : undefined;
+  if (subcategorySlug && !subcategory) return <NotFound />;
 
   return (
-    <>
-      {filteredProducts.length > 0 ? (
-        <div className="category-product-grid">
-          {filteredProducts.map((product, index) => (
-            <ProductCard
-              key={product.id}
-              product={product}
-              index={index}
-              onCustomize={(target, color) => setCustomizeTarget({ product: target, color })}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="category-empty-state">
-          <p className="eyebrow">Made with intention</p>
-          <h2>New pieces arriving soon</h2>
-          <p>
-            {subcategory
-              ? `We are adding new pieces to ${subcategory}. Message us on WhatsApp and we will be happy to help.`
-              : `We are preparing more ${category.name.toLowerCase()} for you. Get in touch and we will be happy to help.`}
-          </p>
-          <a
-            className="button-primary"
-            href={buildWhatsAppUrl(`Hello The Ronkus Brand, I would like to know about ${subcategory ?? category.name}.`)}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <MessageCircle size={16} /> Chat with us on WhatsApp
-          </a>
-        </div>
-      )}
-      <CustomizeItemDialog
-        product={customizeTarget?.product ?? null}
-        selectedColor={customizeTarget?.color}
-        onClose={() => setCustomizeTarget(null)}
-        onAddToCart={addCustomizedItem}
-      />
-    </>
+    <section className="category-page">
+      <LogoBackdrop density="high" />
+      <div className="category-page-content">
+        <header className="category-banner">
+          <img
+            className="category-banner-image"
+            src={category.image_path}
+            alt={`${category.name} collection`}
+            width="1600"
+            height="520"
+            fetchPriority="high"
+            decoding="async"
+          />
+          <div className="category-banner-inner page-shell">
+            <p className="eyebrow">The Ronkus Brand collection</p>
+            <h1>{category.name}</h1>
+            <p>{category.subcategories.map(({ name }) => name).join(' · ')}</p>
+          </div>
+        </header>
+        <SubcategorySlider category={category} activeSubcategory={subcategorySlug} />
+        <section className="category-products page-shell" aria-label={`${category.name} products`}>
+          <div className="category-products-heading">
+            <div>
+              <p className="eyebrow">{subcategory?.name ?? category.name}</p>
+              <h2>{subcategory ? subcategory.name : `Discover ${category.name}`}</h2>
+            </div>
+          </div>
+          <CategoryProducts category={category} subcategorySlug={subcategorySlug} />
+        </section>
+      </div>
+    </section>
   );
 }
 
@@ -190,57 +233,12 @@ export function CategoryPage({
   categorySlug: string;
   subcategorySlug?: string;
 }) {
-  const category = findCategoryBySlug(categorySlug);
-  if (!category) return null;
-  const subcategory = subcategorySlug ? findSubcategoryBySlug(category, subcategorySlug) : undefined;
-  if (subcategorySlug && !subcategory) return null;
-  const productCount = filterProducts(
-    featuredProductsDataSource.listFeaturedProducts(),
-    subcategory ?? '',
-    category.name,
-  ).length;
-
-  return (
-    <section className="category-page">
-      <LogoBackdrop density="high" />
-      <div className="category-page-content">
-        <header className="category-banner">
-          <img className="category-banner-image" src={category.image} alt={`${category.name} collection`} width="1600" height="520" fetchPriority="high" decoding="async" />
-          <div className="category-banner-inner page-shell">
-            <p className="eyebrow">The Ronkus Brand collection</p>
-            <h1>{category.name}</h1>
-            <p>{category.subcategories.join(' · ')}</p>
-          </div>
-        </header>
-        <SubcategorySlider category={category} activeSubcategory={subcategory} />
-        <section className="category-products page-shell" aria-label={`${category.name} products`}>
-          <div className="category-products-heading">
-            <div>
-              <p className="eyebrow">{subcategory ?? category.name}</p>
-              <h2>{subcategory ? `${subcategory}` : `Discover ${category.name}`}</h2>
-            </div>
-            <span>{productCount} {productCount === 1 ? 'piece' : 'pieces'}</span>
-          </div>
-          <CategoryProducts category={category} subcategory={subcategory} />
-        </section>
-      </div>
-    </section>
-  );
-}
-
-export function ComingSoonPage({ title }: { title: string }) {
-  return (
-    <section className="coming-soon-page page-shell">
-      <p className="eyebrow">The Ronkus Brand</p>
-      <h1>{title}</h1>
-      <span className="coming-soon-rule" />
-      <p>We are working on something special. Please check back soon.</p>
-      <Link className="button-primary" href="/shop">Explore the collections <ArrowRight size={16} /></Link>
-    </section>
-  );
-}
-
-export function isKnownCategoryRoute(categorySlug: string, subcategorySlug?: string): boolean {
-  const category = findCategoryBySlug(categorySlug);
-  return Boolean(category && (!subcategorySlug || findSubcategoryBySlug(category, subcategorySlug)));
+  const query = useCategories();
+  if (query.isPending) {
+    return <section className="category-page"><div className="category-banner-skeleton" /></section>;
+  }
+  if (query.isError) return <QueryError onRetry={() => void query.refetch()} />;
+  const category = query.data.find(({ slug }) => slug === categorySlug);
+  if (!category) return <NotFound />;
+  return <CategoryPageContent category={category} subcategorySlug={subcategorySlug} />;
 }

@@ -1,30 +1,32 @@
-import type { Product } from '@/data/catalog';
+import type { CustomRequestFlow } from '@/lib/db-types';
+import type { ProductSelections } from '@/lib/pricing';
 
-export const whatsappBusinessNumber = '2348160309308';
-
-export type CustomizationDetails = {
-  type: string;
-  instructions: string;
-  fee: number;
+export type CustomRequestAnswer = {
+  id: string;
+  label: string;
+  value: string | number;
+  unit: string | null;
 };
 
-export type ProductSelection = {
-  size?: string;
-  color?: string;
-  yardage?: string;
+export type CartCustomRequest = {
+  flow: CustomRequestFlow;
+  answers: CustomRequestAnswer[];
+  fee_ngn: number;
+  notice: string | null;
 };
 
 export type CartItemDraft = {
-  productId: string;
+  product_id: string;
+  slug: string;
   name: string;
   image: string;
-  category: string;
-  basePrice: number;
-  unitPrice: number;
   quantity: number;
-  options: ProductSelection & {
-    customization?: CustomizationDetails;
-  };
+  min_order_qty: number;
+  max_order_qty: number | null;
+  selected_options: ProductSelections;
+  custom_request: CartCustomRequest | null;
+  needed_by: string | null;
+  display_unit_price: number;
 };
 
 export type CartItem = CartItemDraft & {
@@ -45,93 +47,49 @@ export function formatNaira(amount: number): string {
   }).format(amount);
 }
 
-export function getSelectedPrice(product: Product, selection: ProductSelection): number | undefined {
-  if (product.options.yardage) {
-    return product.options.yardage.find((option) => option.label === selection.yardage)?.price;
-  }
-
-  return product.price;
-}
-
-export function createCartItemDraft(
-  product: Product,
-  selection: ProductSelection,
-  customization?: CustomizationDetails,
-): CartItemDraft {
-  if (product.options.sizes && (!selection.size || !product.options.sizes.includes(selection.size))) {
-    throw new Error(`Select a size for ${product.name} before adding it to your cart.`);
-  }
-  if (product.options.colors && (!selection.color || !product.options.colors.includes(selection.color))) {
-    throw new Error(`Select a colour for ${product.name} before adding it to your cart.`);
-  }
-  if (product.options.yardage && !product.options.yardage.some((option) => option.label === selection.yardage)) {
-    throw new Error(`Select a yardage for ${product.name} before adding it to your cart.`);
-  }
-  if (customization && !product.customization?.enabled) {
-    throw new Error(`${product.name} does not support customization.`);
-  }
-
-  const selectedPrice = getSelectedPrice(product, selection);
-  if (selectedPrice === undefined) {
-    throw new Error(`A valid price option is required for ${product.name}.`);
-  }
-
-  return {
-    productId: product.id,
-    name: product.name,
-    image: product.image,
-    category: product.category,
-    basePrice: selectedPrice,
-    unitPrice: selectedPrice + (customization?.fee ?? 0),
-    quantity: 1,
-    options: {
-      ...(selection.size ? { size: selection.size } : {}),
-      ...(selection.color ? { color: selection.color } : {}),
-      ...(selection.yardage ? { yardage: selection.yardage } : {}),
-      ...(customization ? { customization } : {}),
-    },
-  };
-}
-
 export function getCartItemKey(item: CartItemDraft): string {
-  const customization = item.options.customization;
+  const selectedOptions = Object.fromEntries(
+    Object.entries(item.selected_options)
+      .sort(([first], [second]) => first.localeCompare(second))
+      .map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value]),
+  );
   return JSON.stringify({
-    productId: item.productId,
-    size: item.options.size ?? '',
-    color: item.options.color ?? '',
-    yardage: item.options.yardage ?? '',
-    customizationType: customization?.type ?? '',
-    customizationInstructions: customization?.instructions.trim() ?? '',
-    customizationFee: customization?.fee ?? 0,
+    product_id: item.product_id,
+    selected_options: selectedOptions,
+    custom_request: item.custom_request,
+    needed_by: item.needed_by,
+    display_unit_price: item.display_unit_price,
   });
 }
 
 export function mergeCartItem(items: CartItem[], draft: CartItemDraft): CartItem[] {
   const key = getCartItemKey(draft);
   const existing = items.find((item) => item.key === key);
+  if (!existing) return [...items, { ...draft, key }];
 
-  if (existing) {
-    return items.map((item) => (
-      item.key === key ? { ...item, quantity: item.quantity + draft.quantity } : item
-    ));
-  }
-
-  return [...items, { ...draft, key }];
+  return items.map((item) => {
+    if (item.key !== key) return item;
+    const quantity = item.quantity + draft.quantity;
+    return {
+      ...item,
+      quantity: item.max_order_qty === null ? quantity : Math.min(quantity, item.max_order_qty),
+    };
+  });
 }
 
 export function getCartSubtotal(items: CartItem[]): number {
-  return items.reduce((total, item) => total + item.unitPrice * item.quantity, 0);
+  return items.reduce((total, item) => total + item.display_unit_price * item.quantity, 0);
 }
 
-export function filterProducts(
-  inventory: Product[],
-  searchText: string,
-  category: string,
-): Product[] {
+export function filterProducts<T extends {
+  name: string;
+  description: string;
+  category_id: string;
+}>(inventory: T[], searchText: string, categoryId: string): T[] {
   const query = searchText.trim().toLocaleLowerCase();
   return inventory.filter((product) => {
-    const matchesCategory = category === 'All categories' || product.category === category;
-    const searchableText = `${product.name} ${product.category} ${product.description}`.toLocaleLowerCase();
+    const matchesCategory = categoryId === 'all' || product.category_id === categoryId;
+    const searchableText = `${product.name} ${product.description}`.toLocaleLowerCase();
     return matchesCategory && (!query || searchableText.includes(query));
   });
 }
@@ -141,29 +99,29 @@ export function buildWhatsAppMessage(
   items: CartItem[],
   orderTotal: number,
 ): string {
+  const origin = typeof window === 'undefined'
+    ? 'https://theronkusbrand.com.ng'
+    : window.location.origin;
   const orderLines = items.map((item, index) => {
-    const details = [
-      item.options.size ? `Size: ${item.options.size}` : '',
-      item.options.color ? `Colour: ${item.options.color}` : '',
-      item.options.yardage ? `Yardage: ${item.options.yardage}` : '',
-    ].filter(Boolean);
-    const customization = item.options.customization;
-    const priceDetail = customization
-      ? `${formatNaira(item.basePrice)} base + ${formatNaira(customization.fee)} customization per item`
-      : `${formatNaira(item.unitPrice)} per item`;
+    const optionLines = Object.entries(item.selected_options).map(([label, selection]) => {
+      const value = Array.isArray(selection) ? selection.join(', ') : selection;
+      return `   ${label}: ${value}`;
+    });
+    const customLines = item.custom_request?.answers.map(({ label, value, unit }) =>
+      `   ${label}: ${value}${unit ? ` ${unit}` : ''}`,
+    ) ?? [];
 
     return [
       `${index + 1}. ${item.name} × ${item.quantity}`,
-      ...details.map((detail) => `   ${detail}`),
-      ...(customization
-        ? [
-            `   Customization type: ${customization.type}`,
-            `   Instructions: ${customization.instructions}`,
-            `   Customization fee: ${formatNaira(customization.fee)} per item`,
-          ]
+      `   Product: ${origin}/product/${item.slug}`,
+      ...optionLines,
+      ...customLines,
+      ...(item.needed_by ? [`   Needed by: ${item.needed_by}`] : []),
+      ...(item.custom_request && item.custom_request.fee_ngn > 0
+        ? [`   Custom request fee: ${formatNaira(item.custom_request.fee_ngn)} per unit`]
         : []),
-      `   ${priceDetail}`,
-      `   Line total: ${formatNaira(item.unitPrice * item.quantity)}`,
+      `   ${formatNaira(item.display_unit_price)} each`,
+      `   Line total: ${formatNaira(item.display_unit_price * item.quantity)}`,
     ].join('\n');
   });
 
@@ -183,6 +141,8 @@ export function buildWhatsAppMessage(
   ].join('\n');
 }
 
-export function buildWhatsAppUrl(message: string): string {
-  return `https://wa.me/${whatsappBusinessNumber}?text=${encodeURIComponent(message)}`;
+export function buildWhatsAppUrl(message: string, whatsappNumber: string): string {
+  const number = whatsappNumber.replace(/\D/g, '');
+  if (!number) throw new Error('A valid store WhatsApp number is required.');
+  return `https://wa.me/${number}?text=${encodeURIComponent(message)}`;
 }

@@ -1,137 +1,110 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { customizationSettings, products } from '../src/data/catalog.ts';
-import { featuredProductsDataSource } from '../src/data/featured-products.ts';
-import {
-  findCategoryBySlug,
-  findSubcategoryBySlug,
-  slugifyLabel,
-} from '../src/lib/catalog.ts';
 import {
   buildWhatsAppMessage,
   buildWhatsAppUrl,
-  createCartItemDraft,
   filterProducts,
   getCartSubtotal,
   mergeCartItem,
   type CartItem,
+  type CartItemDraft,
 } from '../src/lib/shop.ts';
+import { slugifyLabel } from '../src/lib/catalog.ts';
 
-const essence = products.find((product) => product.id === 'essence')!;
-const apron = products.find((product) => product.id === 'customized-apron')!;
-const fabric = products.find((product) => product.id === 'african-print-fabrics')!;
+function cartItem(overrides: Partial<CartItemDraft> = {}): CartItemDraft {
+  return {
+    product_id: 'product-1',
+    slug: 'sample-product',
+    name: 'Sample product',
+    image: '/assets/sample.jpg',
+    quantity: 1,
+    min_order_qty: 1,
+    max_order_qty: null,
+    selected_options: {},
+    custom_request: null,
+    needed_by: null,
+    display_unit_price: 12000,
+    ...overrides,
+  };
+}
 
-test('category slugs normalize names and preserve category ordering', () => {
+test('category slugs match the seeded category names', () => {
   assert.equal(slugifyLabel('Bags & Totes'), 'bags-totes');
   assert.equal(slugifyLabel('Clothing & Fabrics'), 'clothing-fabrics');
-  assert.equal(findCategoryBySlug('bags-totes')?.name, 'Bags & Totes');
-  assert.equal(findCategoryBySlug('unknown'), undefined);
 });
 
-test('subcategory lookup uses the configured category list', () => {
-  const clothing = findCategoryBySlug('clothing-fabrics');
-  assert.ok(clothing);
-  assert.equal(findSubcategoryBySlug(clothing, 'joggers'), 'Joggers');
-  assert.equal(findSubcategoryBySlug(clothing, 'unknown'), undefined);
+test('cart entries merge only when product choices and custom answers match', () => {
+  const first = cartItem({ selected_options: { size: '38', colour: 'Black' } });
+  const same = cartItem({ selected_options: { size: '38', colour: 'Black' } });
+  const different = cartItem({ selected_options: { size: '39', colour: 'Black' } });
+  let items: CartItem[] = [];
+  items = mergeCartItem(items, first);
+  items = mergeCartItem(items, same);
+  items = mergeCartItem(items, different);
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map(({ quantity }) => quantity), [2, 1]);
 });
 
-test('featured products are exposed through a replaceable local data source', () => {
-  const featuredProducts = featuredProductsDataSource.listFeaturedProducts();
-  assert.deepEqual(featuredProducts.map((product) => product.id), products.map((product) => product.id));
-  assert.equal(featuredProducts.length, 4);
-});
-
-test('cart additions require each configured option', () => {
-  assert.throws(() => createCartItemDraft(essence, { size: '36' }), /Select a colour/);
-  assert.throws(() => createCartItemDraft(essence, { color: 'Red' }), /Select a size/);
-  assert.throws(() => createCartItemDraft(essence, { size: '44', color: 'Red' }), /Select a size/);
-  assert.throws(() => createCartItemDraft(fabric, {}), /Select a yardage/);
-});
-
-test('yardage selection controls the product price', () => {
-  const threeYards = createCartItemDraft(fabric, { yardage: '3 yards' });
-  const sixYards = createCartItemDraft(fabric, { yardage: '6 yards' });
-  assert.equal(threeYards.unitPrice, 3000);
-  assert.equal(sixYards.unitPrice, 6000);
-  assert.equal(threeYards.options.color, undefined);
-});
-
-test('customized apron keeps colour, instructions and its configured fee', () => {
-  const customized = createCartItemDraft(
-    apron,
-    { color: 'Pink' },
-    {
-      type: 'Branding/Logo',
-      instructions: 'Place the round logo at the centre of the top pocket.',
-      fee: customizationSettings.fee,
+test('cart custom request answer, date and display unit price are persisted in the item model', () => {
+  const item = cartItem({
+    quantity: 10,
+    min_order_qty: 10,
+    max_order_qty: 20,
+    custom_request: {
+      flow: 'checkout',
+      answers: [{ id: 'bust', label: 'Bust', value: 92, unit: 'cm' }],
+      fee_ngn: 2000,
+      notice: 'Allow two weeks.',
     },
-  );
-  assert.equal(customized.options.color, 'Pink');
-  assert.equal(customized.options.customization?.type, 'Branding/Logo');
-  assert.equal(customized.options.customization?.instructions, 'Place the round logo at the centre of the top pocket.');
-  assert.equal(customized.options.customization?.fee, 2000);
-  assert.equal(customized.unitPrice, 12000);
+    needed_by: '2026-11-20',
+    display_unit_price: 14000,
+  });
+  const items = mergeCartItem([], item);
+  assert.equal(items[0].product_id, 'product-1');
+  assert.equal(items[0].slug, 'sample-product');
+  assert.equal(items[0].selected_options, item.selected_options);
+  assert.equal(items[0].custom_request?.answers[0].unit, 'cm');
+  assert.equal(items[0].needed_by, '2026-11-20');
+  assert.equal(getCartSubtotal(items), 140000);
 });
 
-test('matching variants merge while different options and instructions stay distinct', () => {
-  const first = createCartItemDraft(essence, { size: '38', color: 'Black' });
-  const same = createCartItemDraft(essence, { size: '38', color: 'Black' });
-  const differentSize = createCartItemDraft(essence, { size: '39', color: 'Black' });
-  let cart: CartItem[] = [];
-  cart = mergeCartItem(cart, first);
-  cart = mergeCartItem(cart, same);
-  cart = mergeCartItem(cart, differentSize);
-  assert.equal(cart.length, 2);
-  assert.deepEqual(cart.map((item) => item.quantity), [2, 1]);
-
-  const customOne = createCartItemDraft(apron, { color: 'Red' }, {
-    type: 'Personalised Details',
-    instructions: 'Add the name Tola on the upper chest.',
-    fee: 2000,
-  });
-  const customTwo = createCartItemDraft(apron, { color: 'Red' }, {
-    type: 'Personalised Details',
-    instructions: 'Add the name Zainab on the upper chest.',
-    fee: 2000,
-  });
-  cart = mergeCartItem(cart, customOne);
-  cart = mergeCartItem(cart, customTwo);
-  assert.equal(cart.length, 4);
-  assert.equal(cart[2].quantity, 1);
-  assert.equal(cart[3].quantity, 1);
-  assert.equal(getCartSubtotal(cart), 69000);
+test('search filters live product records by name, description and category id', () => {
+  const inventory = [
+    { name: 'Leather slides', description: 'Soft footwear', category_id: 'footwear' },
+    { name: 'Print fabric', description: 'African cotton by the yard', category_id: 'fabric' },
+  ];
+  assert.deepEqual(filterProducts(inventory, 'slides', 'all').map(({ name }) => name), ['Leather slides']);
+  assert.deepEqual(filterProducts(inventory, '', 'fabric').map(({ name }) => name), ['Print fabric']);
 });
 
-test('search and category filters only return configured inventory', () => {
-  assert.deepEqual(filterProducts(products, 'slides', 'All categories').map((item) => item.id), ['essence']);
-  assert.deepEqual(filterProducts(products, '', 'Clothing & Fabrics').map((item) => item.id), [
-    'african-print-fabrics',
-    'men-vintage-shirt',
-  ]);
-  assert.deepEqual(filterProducts(products, '', 'Bags & Totes'), []);
-});
-
-test('WhatsApp order message and URL include customer, options, customization and calculated totals', () => {
-  const cartItem = createCartItemDraft(apron, { color: 'Black' }, {
-    type: 'Other Request',
-    instructions: 'Add a small name on the left pocket.',
-    fee: 2000,
+test('WhatsApp order message and URL include cart details and use the provided store number', () => {
+  const item = cartItem({
+    selected_options: { size: '38', colour: ['Black', 'Gold'] },
+    custom_request: {
+      flow: 'checkout',
+      answers: [{ id: 'design', label: 'Design', value: 'Blue embroidery', unit: null }],
+      fee_ngn: 2000,
+      notice: null,
+    },
+    needed_by: '2026-11-20',
+    display_unit_price: 14000,
   });
-  const cart = mergeCartItem([], cartItem);
+  const items = mergeCartItem([], item);
   const message = buildWhatsAppMessage(
     { name: 'Ada Okafor', phone: '+234 800 111 2222', address: '12 Market Road, Lagos' },
-    cart,
-    getCartSubtotal(cart),
+    items,
+    getCartSubtotal(items),
   );
-  const url = new URL(buildWhatsAppUrl(message));
+  const url = new URL(buildWhatsAppUrl(message, '+234 816 030 9308'));
 
   assert.equal(url.host, 'wa.me');
   assert.equal(url.pathname, '/2348160309308');
   assert.equal(url.searchParams.get('text'), message);
   assert.match(message, /Name: Ada Okafor/);
-  assert.match(message, /Colour: Black/);
-  assert.match(message, /Customization type: Other Request/);
-  assert.match(message, /Customization fee: ₦?2,000 per item/);
-  assert.match(message, /Line total: ₦?12,000/);
-  assert.match(message, /Order total: ₦?12,000/);
+  assert.match(message, /size: 38/);
+  assert.match(message, /colour: Black, Gold/);
+  assert.match(message, /Design: Blue embroidery/);
+  assert.match(message, /Needed by: 2026-11-20/);
+  assert.match(message, /Line total: ₦?14,000/);
+  assert.match(message, /Order total: ₦?14,000/);
 });

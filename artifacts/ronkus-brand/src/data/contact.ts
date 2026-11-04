@@ -1,7 +1,5 @@
-import type { Category } from '@/data/catalog';
-
 export type ContactCategory = {
-  categoryName: Category['name'];
+  categoryName: string;
   description: string;
 };
 

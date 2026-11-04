@@ -8,12 +8,12 @@ import {
   X,
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
-import { categories } from '@/data/catalog';
 import { contactData } from '@/data/contact';
 import { useShop } from '@/components/shop-provider';
 import { ShoppingCartDialog } from '@/components/shopping-cart-dialog';
 import { getCategoryPath } from '@/lib/catalog';
 import { buildWhatsAppUrl } from '@/lib/shop';
+import { useCategories, useStoreSettings } from '@/lib/store-api';
 
 const instagramUrl = contactData.contact.instagramUrl;
 const facebookUrl = 'https://www.facebook.com/share/14sWXoMEgGM/';
@@ -69,6 +69,7 @@ function Header() {
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const desktopShopButtonRef = useRef<HTMLButtonElement>(null);
   const { itemCount, setCartOpen } = useShop();
+  const categoriesQuery = useCategories();
 
   const closeMenus = () => {
     setMobileOpen(false);
@@ -78,7 +79,7 @@ function Header() {
   const isActive = (href: string) => (
     href === '/shop' ? location === '/shop' || location.startsWith('/shop/') : location === href
   );
-  const isCategoryActive = (category: typeof categories[number]) => {
+  const isCategoryActive = (category: NonNullable<typeof categoriesQuery.data>[number]) => {
     const categoryPath = getCategoryPath(category);
     return location === categoryPath || location.startsWith(`${categoryPath}/`);
   };
@@ -164,7 +165,7 @@ function Header() {
             {shopOpen && (
               <div className="shop-dropdown" id="shop-menu">
                 <Link href="/shop" onClick={closeMenus} aria-current={location === '/shop' ? 'page' : undefined}>All categories</Link>
-                {categories.map((category) => (
+                {categoriesQuery.data?.map((category) => (
                   <Link
                     key={category.name}
                     href={getCategoryPath(category)}
@@ -175,6 +176,9 @@ function Header() {
                     {category.name}
                   </Link>
                 ))}
+                {categoriesQuery.isError && (
+                  <button type="button" onClick={() => void categoriesQuery.refetch()}>Retry categories</button>
+                )}
               </div>
             )}
           </div>
@@ -229,7 +233,7 @@ function Header() {
           {shopOpen && (
             <div className="mobile-shop-list" id="mobile-shop-list">
               <Link href="/shop" onClick={closeMenus} aria-current={location === '/shop' ? 'page' : undefined}>All categories</Link>
-              {categories.map((category) => (
+              {categoriesQuery.data?.map((category) => (
                 <Link
                   key={category.name}
                   href={getCategoryPath(category)}
@@ -240,6 +244,9 @@ function Header() {
                   {category.name}
                 </Link>
               ))}
+              {categoriesQuery.isError && (
+                <button type="button" onClick={() => void categoriesQuery.refetch()}>Retry categories</button>
+              )}
             </div>
           )}
           {exploreLinks.map((item) => (
@@ -259,6 +266,10 @@ function Header() {
 }
 
 function Footer() {
+  const categoriesQuery = useCategories();
+  const settingsQuery = useStoreSettings();
+  const whatsappNumber = settingsQuery.data?.whatsapp_number;
+
   return (
     <footer className="site-footer" id="footer">
       <div className="page-shell footer-main">
@@ -270,14 +281,20 @@ function Footer() {
             <a href={facebookUrl} target="_blank" rel="noopener noreferrer" aria-label="The Ronkus Brand on Facebook">f</a>
           </div>
           <a className="footer-email" href={`mailto:${contactData.contact.email}`}>{contactData.contact.email}</a>
-          <a
-            className="footer-contact-link"
-            href={buildWhatsAppUrl(contactData.contact.whatsappMessage)}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {contactData.contact.whatsappNumber}
-          </a>
+          {whatsappNumber ? (
+            <a
+              className="footer-contact-link"
+              href={buildWhatsAppUrl(contactData.contact.whatsappMessage, whatsappNumber)}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {whatsappNumber}
+            </a>
+          ) : (
+            <span className="footer-contact-text">
+              {settingsQuery.isError ? 'WhatsApp details unavailable' : 'Loading WhatsApp details'}
+            </span>
+          )}
           <span className="footer-contact-text">{contactData.contact.location}</span>
           <a className="footer-contact-text" href={instagramUrl} target="_blank" rel="noopener noreferrer">
             {contactData.contact.instagramHandle}
@@ -293,9 +310,12 @@ function Footer() {
         </div>
         <div className="footer-links-column">
           <p className="footer-column-title">Shop categories</p>
-          {categories.map((category) => (
+          {categoriesQuery.data?.map((category) => (
             <Link key={category.name} href={getCategoryPath(category)}>{category.name}</Link>
           ))}
+          {categoriesQuery.isError && (
+            <button type="button" onClick={() => void categoriesQuery.refetch()}>Retry categories</button>
+          )}
         </div>
         <div className="footer-note">
           <span>Personal expression,</span>
