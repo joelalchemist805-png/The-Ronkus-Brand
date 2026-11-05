@@ -13,10 +13,9 @@ import { academyData } from '@/data/academy';
 import {
   CategoryPage,
   ShopOverviewPage,
-  isKnownCategoryRoute,
 } from '@/pages/shop-pages';
+import { ProductPage } from '@/pages/product-page';
 import NotFound from '@/pages/not-found';
-import { findCategoryBySlug, findSubcategoryBySlug } from '@/lib/catalog';
 import {
   Route,
   Switch,
@@ -70,14 +69,12 @@ function Home() {
 function CategoryRoute() {
   const [matches, params] = useRoute('/shop/:category/:subcategory');
   if (!matches || !params) return null;
-  if (!isKnownCategoryRoute(params.category, params.subcategory)) return <NotFound />;
   return <CategoryPage categorySlug={params.category} subcategorySlug={params.subcategory} />;
 }
 
 function CategoryRootRoute() {
   const [matches, params] = useRoute('/shop/:category');
   if (!matches || !params) return null;
-  if (!isKnownCategoryRoute(params.category)) return <NotFound />;
   return <CategoryPage categorySlug={params.category} />;
 }
 
@@ -85,17 +82,8 @@ function getPageTitle(location: string): string {
   const segments = location.split('/').filter(Boolean);
   if (segments.length === 0) return 'Home | The Ronkus Brand';
   if (segments[0] === 'shop' && segments.length === 1) return 'Shop | The Ronkus Brand';
-  if (segments[0] === 'shop' && segments.length <= 3 && segments[1]) {
-    const category = findCategoryBySlug(segments[1]);
-    if (!category) return 'Page Not Found | The Ronkus Brand';
-    if (segments[2]) {
-      const subcategory = findSubcategoryBySlug(category, segments[2]);
-      return subcategory
-        ? `${subcategory} | The Ronkus Brand`
-        : 'Page Not Found | The Ronkus Brand';
-    }
-    return `${category.name} | The Ronkus Brand`;
-  }
+  if (segments[0] === 'shop' && segments.length <= 3) return 'Shop | The Ronkus Brand';
+  if (segments[0] === 'product') return 'Product | The Ronkus Brand';
   const pageTitles: Record<string, string> = {
     '/academy': academyData.title,
     '/faq': 'FAQ',
@@ -113,19 +101,9 @@ function getPageDescription(location: string): string {
     return 'Discover handcrafted footwear, expressive fashion, statement accessories and personalized pieces from The Ronkus Brand.';
   }
   if (segments[0] === 'shop' && segments.length <= 3) {
-    if (segments.length === 1) {
-      return 'Explore all handcrafted footwear, clothing, bags, hair accessories and lifestyle pieces from The Ronkus Brand.';
-    }
-    const category = findCategoryBySlug(segments[1]);
-    if (!category) return 'The page you are looking for could not be found. Explore The Ronkus Brand shop or return home.';
-    if (segments[2]) {
-      const subcategory = findSubcategoryBySlug(category, segments[2]);
-      return subcategory
-        ? `Shop ${subcategory} from The Ronkus Brand, crafted to complete your outfit with comfort and style.`
-        : 'The page you are looking for could not be found. Explore The Ronkus Brand shop or return home.';
-    }
-    return `Discover ${category.name} from The Ronkus Brand, made to complete your outfit with comfort and style.`;
+    return 'Explore handcrafted footwear, clothing, bags, hair accessories and lifestyle pieces from The Ronkus Brand.';
   }
+  if (segments[0] === 'product') return 'Discover handcrafted products from The Ronkus Brand.';
   const pageDescriptions: Record<string, string> = {
     '/academy': academyData.intro,
     '/faq': 'Find answers about ordering, custom orders, delivery, payment and the Shoemaking Academy.',
@@ -175,6 +153,7 @@ function Router() {
         <Switch>
           <Route path="/" component={Home} />
           <Route path="/shop" component={ShopOverviewPage} />
+          <Route path="/product/:slug">{(params) => <ProductPage slug={params.slug} />}</Route>
           <Route path="/shop/:category/:subcategory"><CategoryRoute /></Route>
           <Route path="/shop/:category"><CategoryRootRoute /></Route>
           <Route path="/academy" component={AcademyPage} />

@@ -183,6 +183,7 @@ export async function deleteCouponIfUnused(id: string): Promise<void> {
     .eq('id', id)
     .single();
   throwOnError(readError);
+  if (!data) throw new Error('Coupon could not be loaded.');
   if (data.redemption_count > 0) {
     throw new Error('This coupon has redemptions. Deactivate it instead.');
   }
