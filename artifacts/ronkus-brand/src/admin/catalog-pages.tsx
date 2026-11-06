@@ -25,7 +25,7 @@ import {
   EmptyState,
   LoadingState,
 } from './admin-components';
-import { formatNaira, parseNaira, slugify } from './helpers';
+import { formatNaira, parseWholeNumber, slugify } from './helpers';
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
@@ -62,8 +62,8 @@ function CategoryEditor({ row, onRefresh }: {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const order = Number(sortOrder);
-    if (!name.trim() || !imagePath.trim() || !Number.isSafeInteger(order)) {
+    const order = parseWholeNumber(sortOrder, { allowNegative: true });
+    if (!name.trim() || !imagePath.trim() || order === null) {
       toast.error('Enter a name, image path, and whole-number sort order.');
       return;
     }
@@ -145,8 +145,8 @@ function SubcategoryEditor({ row, onRefresh }: {
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    const order = Number(sortOrder);
-    if (!name.trim() || !Number.isSafeInteger(order)) {
+    const order = parseWholeNumber(sortOrder, { allowNegative: true });
+    if (!name.trim() || order === null) {
       toast.error('Enter a name and a whole-number sort order.');
       return;
     }
@@ -213,8 +213,8 @@ function NewSubcategory({ categoryId, onRefresh }: {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const order = Number(sortOrder);
-    if (!name.trim() || !slugify(slug) || !Number.isSafeInteger(order)) {
+    const order = parseWholeNumber(sortOrder, { allowNegative: true });
+    if (!name.trim() || !slugify(slug) || order === null) {
       toast.error('Enter a name, valid slug, and whole-number sort order.');
       return;
     }
@@ -280,8 +280,8 @@ export function CategoriesPage() {
 
 type DeliveryFormValues = {
   name: string;
-  fee: string;
-  sortOrder: string;
+  fee: number;
+  sortOrder: number;
   active: boolean;
 };
 
@@ -298,15 +298,15 @@ function DeliveryAreaForm({ initial, onSave, onCancel }: {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const parsedFee = parseNaira(fee);
-    const parsedOrder = Number(sortOrder);
-    if (!name.trim() || parsedFee === null || !Number.isSafeInteger(parsedOrder)) {
+    const parsedFee = parseWholeNumber(fee);
+    const parsedOrder = parseWholeNumber(sortOrder, { allowNegative: true });
+    if (!name.trim() || parsedFee === null || parsedOrder === null) {
       toast.error('Enter a name, a whole naira fee of zero or more, and a whole-number sort order.');
       return;
     }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), fee: String(parsedFee), sortOrder: String(parsedOrder), active }, initial?.id);
+      await onSave({ name: name.trim(), fee: parsedFee, sortOrder: parsedOrder, active }, initial?.id);
       if (!initial) {
         setName('');
         setFee('');
@@ -358,8 +358,8 @@ export function DeliveryPage() {
   const save = async (values: DeliveryFormValues, id?: string) => {
     await saveDeliveryArea({
       name: values.name,
-      fee_ngn: Number(values.fee),
-      sort_order: Number(values.sortOrder),
+      fee_ngn: values.fee,
+      sort_order: values.sortOrder,
       is_active: values.active,
     }, id);
     toast.success(id ? 'Delivery area saved.' : 'Delivery area added.');

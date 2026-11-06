@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { Toaster, toast } from 'sonner';
 import { AdminAuthProvider, useAdminAuth } from './admin-auth';
 import { AdminButton, AdminCard, AdminInput, LoadingState } from './admin-components';
@@ -6,6 +6,8 @@ import './admin.css';
 
 const CategoriesPage = lazy(() => import('./catalog-pages').then((module) => ({ default: module.CategoriesPage })));
 const DeliveryPage = lazy(() => import('./catalog-pages').then((module) => ({ default: module.DeliveryPage })));
+const ProductsPage = lazy(() => import('./product-pages').then((module) => ({ default: module.ProductsPage })));
+const ProductFormPage = lazy(() => import('./product-pages').then((module) => ({ default: module.ProductFormPage })));
 const CouponsPage = lazy(() => import('./coupon-pages').then((module) => ({ default: module.CouponsPage })));
 const SettingsPage = lazy(() => import('./coupon-pages').then((module) => ({ default: module.SettingsPage })));
 
@@ -15,7 +17,7 @@ const navigation = [
   { path: '/admin/delivery', label: 'Delivery', soon: false },
   { path: '/admin/coupons', label: 'Coupons', soon: false },
   { path: '/admin/settings', label: 'Settings', soon: false },
-  { path: '/admin/products', label: 'Products', soon: true },
+  { path: '/admin/products', label: 'Products', soon: false },
   { path: '/admin/featured', label: 'Featured', soon: true },
   { path: '/admin/orders', label: 'Orders', soon: true },
   { path: '/admin/promotions', label: 'Promotions', soon: true },
@@ -24,13 +26,62 @@ const navigation = [
 const failedAttemptsStorageKey = 'ronkus-admin-failed-attempts';
 const lockoutStorageKey = 'ronkus-admin-lock-until';
 
+function normalizeAdminPath(pathname: string): string {
+  return pathname.replace(/\/+$/, '') || '/';
+}
+
 function useAdminPath() {
-  const [path, setPath] = useState(window.location.pathname);
+  const [path, setPath] = useState(() => normalizeAdminPath(window.location.pathname));
+  const pathRef = useRef(path);
+  const dirtyRef = useRef(false);
+  const setDirty = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty;
+  }, []);
+  const navigateTo = useCallback((pathname: string) => {
+    const nextPath = normalizeAdminPath(pathname);
+    if (nextPath === pathRef.current) return;
+    if (dirtyRef.current && !window.confirm('You have unsaved changes. Leave this page and discard them?')) return;
+    window.history.pushState(null, '', nextPath);
+    pathRef.current = nextPath;
+    setPath(nextPath);
+  }, []);
 
   useEffect(() => {
-    const updatePath = () => setPath(window.location.pathname);
+    if (window.location.pathname !== path) {
+      window.history.replaceState(
+        null,
+        '',
+        `${path}${window.location.search}${window.location.hash}`,
+      );
+    }
+    const updatePath = () => {
+      const nextPath = normalizeAdminPath(window.location.pathname);
+      if (dirtyRef.current && nextPath !== pathRef.current
+        && !window.confirm('You have unsaved changes. Leave this page and discard them?')) {
+        window.history.pushState(null, '', pathRef.current);
+        return;
+      }
+      if (window.location.pathname !== nextPath) {
+        window.history.replaceState(
+          null,
+          '',
+          `${nextPath}${window.location.search}${window.location.hash}`,
+        );
+      }
+      pathRef.current = nextPath;
+      setPath(nextPath);
+    };
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
     window.addEventListener('popstate', updatePath);
-    return () => window.removeEventListener('popstate', updatePath);
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => {
+      window.removeEventListener('popstate', updatePath);
+      window.removeEventListener('beforeunload', warnBeforeUnload);
+    };
   }, []);
 
   const navigate = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -45,11 +96,10 @@ function useAdminPath() {
     const anchor = event.currentTarget;
     if (anchor.origin !== window.location.origin) return;
     event.preventDefault();
-    window.history.pushState(null, '', anchor.pathname);
-    setPath(anchor.pathname);
+    navigateTo(anchor.pathname);
   };
 
-  return { path, navigate };
+  return { path, navigate, navigateTo, setDirty };
 }
 
 function LoginScreen() {
@@ -231,9 +281,10 @@ function getComingSoonTitle(path: string): string | null {
 }
 
 function AdminShell() {
-  const { path, navigate } = useAdminPath();
+  const { path, navigate, navigateTo, setDirty } = useAdminPath();
   const { signOut, checking } = useAdminAuth();
   const pageTitle = getComingSoonTitle(path);
+  const productEditMatch = /^\/admin\/products\/([^/]+)$/.exec(path);
 
   if (checking) {
     return <main className="admin-loading-screen"><LoadingState label="Checking your administrator access…" /></main>;
@@ -249,6 +300,12 @@ function AdminShell() {
           ? <CouponsPage />
           : path === '/admin/settings'
             ? <SettingsPage />
+            : path === '/admin/products'
+              ? <ProductsPage onNavigate={navigate} />
+              : path === '/admin/products/new'
+                ? <ProductFormPage onNavigate={navigate} onNavigateTo={navigateTo} onDirtyChange={setDirty} />
+                : productEditMatch
+                  ? <ProductFormPage id={productEditMatch[1]} onNavigate={navigate} onNavigateTo={navigateTo} onDirtyChange={setDirty} />
             : pageTitle
               ? <ComingSoonPage title={pageTitle} />
               : <ComingSoonPage title="Admin page" />;

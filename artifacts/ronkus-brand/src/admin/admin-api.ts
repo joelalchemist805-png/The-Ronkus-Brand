@@ -1,11 +1,62 @@
 import type { Database } from '@/lib/db-types';
 import { adminSupabase } from './admin-supabase';
+import { buildProductImageStoragePath } from './helpers';
 
 export type Category = Database['public']['Tables']['categories']['Row'];
 export type Subcategory = Database['public']['Tables']['subcategories']['Row'];
 export type DeliveryArea = Database['public']['Tables']['delivery_areas']['Row'];
 export type Coupon = Database['public']['Tables']['coupons']['Row'];
 export type StoreSetting = Database['public']['Tables']['store_settings']['Row'];
+export type Product = Database['public']['Tables']['products']['Row'];
+export type ProductImage = Database['public']['Tables']['product_images']['Row'];
+export type ProductWrite = Pick<
+  Product,
+  | 'slug'
+  | 'name'
+  | 'description'
+  | 'price_ngn'
+  | 'price_suffix'
+  | 'category_id'
+  | 'subcategory_id'
+  | 'audience'
+  | 'availability'
+  | 'is_active'
+  | 'min_order_qty'
+  | 'max_order_qty'
+  | 'lead_time_days_min'
+  | 'lead_time_days_max'
+  | 'lead_time_note'
+  | 'size_guide_note'
+>;
+
+export type ProductListItem = Pick<
+  Product,
+  | 'id'
+  | 'slug'
+  | 'name'
+  | 'price_ngn'
+  | 'price_suffix'
+  | 'category_id'
+  | 'availability'
+  | 'is_active'
+  | 'is_featured'
+  | 'updated_at'
+> & {
+  categoryName: string;
+  photoUrl: string | null;
+};
+
+export type ProductListFilters = {
+  search?: string;
+  categoryId?: string;
+  availability?: Product['availability'] | '';
+  active?: boolean | null;
+};
+
+export type ProductListResult = {
+  items: ProductListItem[];
+  totalCount: number;
+};
 
 export type SubcategoryAdminRow = {
   subcategory: Subcategory;
@@ -29,8 +80,371 @@ export function friendlyAdminError(error: AdminError): string {
   }
 }
 
+function friendlyProductError(error: AdminError): string {
+  if (error.code === '23503') {
+    return 'The selected category or subcategory is no longer available. Refresh and choose it again.';
+  }
+  if (error.code === '23514') {
+    return 'Some product values do not meet the required rules. Review the fields and try again.';
+  }
+  return friendlyAdminError(error);
+}
+
+function throwOnProductSlugError(error: AdminError | null): void {
+  if (error?.code === '23505') {
+    throw new Error('That web address is already used by another product.');
+  }
+  throwOnProductError(error);
+}
+
 function throwOnError(error: AdminError | null): void {
   if (error) throw new Error(friendlyAdminError(error));
+}
+
+function throwOnProductError(error: AdminError | null): void {
+  if (error) throw new Error(friendlyProductError(error));
+}
+
+function publicProductImageUrl(path: string): string {
+  return adminSupabase.storage.from('product-images').getPublicUrl(path).data.publicUrl;
+}
+
+export function getProductImageUrl(path: string): string {
+  return publicProductImageUrl(path);
+}
+
+function warnStorageCleanup(): void {
+  console.warn('Could not delete a product photo from storage.');
+}
+
+async function removeProductStorageFiles(paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  try {
+    const { error } = await adminSupabase.storage.from('product-images').remove(paths);
+    if (error) warnStorageCleanup();
+  } catch {
+    warnStorageCleanup();
+  }
+}
+
+export async function listProductCategories(): Promise<{ id: string; name: string }[]> {
+  const { data, error } = await adminSupabase
+    .from('categories')
+    .select('id, name')
+    .order('sort_order')
+    .order('name');
+  throwOnError(error);
+  if (!data) throw new Error('Categories could not be loaded.');
+  return data;
+}
+
+export async function listProductSubcategories(
+  categoryId: string,
+): Promise<{ id: string; category_id: string; name: string }[]> {
+  const { data, error } = await adminSupabase
+    .from('subcategories')
+    .select('id, category_id, name')
+    .eq('category_id', categoryId)
+    .order('sort_order')
+    .order('name');
+  throwOnError(error);
+  if (!data) throw new Error('Subcategories could not be loaded.');
+  return data;
+}
+
+export async function listProducts(
+  filters: ProductListFilters,
+  from: number,
+  pageSize = 25,
+): Promise<ProductListResult> {
+  let query = adminSupabase
+    .from('products')
+    .select(
+      'id, slug, name, price_ngn, price_suffix, category_id, availability, is_active, is_featured, updated_at',
+      { count: 'exact' },
+    )
+    .order('updated_at', { ascending: false })
+    .range(from, from + pageSize - 1);
+  const search = filters.search?.trim();
+  if (search) query = query.ilike('name', `%${search.replace(/[\\%_]/g, '\\$&')}%`);
+  if (filters.categoryId) query = query.eq('category_id', filters.categoryId);
+  if (filters.availability) query = query.eq('availability', filters.availability);
+  if (filters.active !== null && filters.active !== undefined) {
+    query = query.eq('is_active', filters.active);
+  }
+
+  const { data, count, error } = await query;
+  throwOnProductError(error);
+  if (!data) throw new Error('Products could not be loaded.');
+  if (data.length === 0) return { items: [], totalCount: count ?? 0 };
+
+  const categoryIds = [...new Set(data.map((product) => product.category_id))];
+  const productIds = data.map((product) => product.id);
+  const [categoryResult, imageResult] = await Promise.all([
+    adminSupabase.from('categories').select('id, name').in('id', categoryIds),
+    adminSupabase
+      .from('product_images')
+      .select('product_id, storage_path')
+      .in('product_id', productIds)
+      .eq('position', 1),
+  ]);
+  throwOnError(categoryResult.error);
+  throwOnError(imageResult.error);
+  if (!categoryResult.data || !imageResult.data) {
+    throw new Error('Product details could not be loaded.');
+  }
+  const categoryNames = new Map(categoryResult.data.map((category) => [category.id, category.name]));
+  const photoPaths = new Map(imageResult.data.map((image) => [image.product_id, image.storage_path]));
+
+  return {
+    items: data.map((product) => ({
+      ...product,
+      categoryName: categoryNames.get(product.category_id) ?? 'Unknown category',
+      photoUrl: photoPaths.has(product.id)
+        ? publicProductImageUrl(photoPaths.get(product.id)!)
+        : null,
+    })),
+    totalCount: count ?? 0,
+  };
+}
+
+export async function getProduct(id: string): Promise<ProductWrite | null> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .select(
+      'slug, name, description, price_ngn, price_suffix, category_id, subcategory_id, audience, availability, is_active, min_order_qty, max_order_qty, lead_time_days_min, lead_time_days_max, lead_time_note, size_guide_note',
+    )
+    .eq('id', id)
+    .maybeSingle();
+  throwOnProductError(error);
+  return data;
+}
+
+export async function createProduct(values: ProductWrite): Promise<string> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .insert(values)
+    .select('id')
+    .single();
+  throwOnProductSlugError(error);
+  if (!data) throw new Error('The product could not be created.');
+  return data.id;
+}
+
+export async function updateProduct(id: string, values: ProductWrite): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .update(values)
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+  throwOnProductSlugError(error);
+  if (!data) throw new Error('Product not found.');
+}
+
+export async function setProductActive(id: string, isActive: boolean): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .update({ is_active: isActive })
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+  throwOnProductError(error);
+  if (!data) throw new Error('Product not found.');
+}
+
+export async function productHasOrders(id: string): Promise<boolean> {
+  const { count, error } = await adminSupabase
+    .from('order_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('product_id', id);
+  throwOnError(error);
+  return (count ?? 0) > 0;
+}
+
+export async function deleteProduct(id: string): Promise<void> {
+  if (await productHasOrders(id)) {
+    throw new Error('This product appears in order history. Hide it from the storefront instead.');
+  }
+  const images = await listProductImages(id);
+  const { data, error } = await adminSupabase
+    .from('products')
+    .delete()
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+  throwOnProductError(error);
+  if (!data) throw new Error('Product not found.');
+  await removeProductStorageFiles(images.map((image) => image.storage_path));
+}
+
+export async function listProductImages(productId: string): Promise<ProductImage[]> {
+  const { data, error } = await adminSupabase
+    .from('product_images')
+    .select('id, product_id, storage_path, alt_text, position, created_at, updated_at')
+    .eq('product_id', productId)
+    .order('position');
+  throwOnProductError(error);
+  if (!data) throw new Error('Product photos could not be loaded.');
+  return data;
+}
+
+export async function uploadProductImage(
+  productId: string,
+  position: number,
+  file: File,
+  altText: string,
+  imageId?: string,
+): Promise<void> {
+  let oldPath: string | null = null;
+  if (imageId) {
+    const { data, error } = await adminSupabase
+      .from('product_images')
+      .select('storage_path')
+      .eq('id', imageId)
+      .eq('product_id', productId)
+      .maybeSingle();
+    throwOnProductError(error);
+    if (!data) throw new Error('The photo could not be found.');
+    oldPath = data.storage_path;
+  }
+
+  const path = buildProductImageStoragePath(productId, file.name);
+  try {
+    const { error: uploadError } = await adminSupabase.storage
+      .from('product-images')
+      .upload(path, file, { contentType: file.type, upsert: false });
+    if (uploadError) throw new Error('The photo could not be uploaded. Please try again.');
+  } catch {
+    throw new Error('The photo could not be uploaded. Please try again.');
+  }
+
+  if (imageId) {
+    const { data, error } = await adminSupabase
+      .from('product_images')
+      .update({ storage_path: path, alt_text: altText })
+      .eq('id', imageId)
+      .eq('product_id', productId)
+      .select('id')
+      .maybeSingle();
+    if (error || !data) {
+      await removeProductStorageFiles([path]);
+      if (error) throwOnProductError(error);
+      throw new Error('The photo could not be replaced. Please try again.');
+    }
+    if (oldPath && oldPath !== path) await removeProductStorageFiles([oldPath]);
+    return;
+  }
+
+  const { error } = await adminSupabase.from('product_images').insert({
+    product_id: productId,
+    storage_path: path,
+    alt_text: altText,
+    position,
+  });
+  if (error) {
+    await removeProductStorageFiles([path]);
+    throwOnProductError(error);
+  }
+}
+
+export async function saveProductImageMeta(imageId: string, altText: string): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('product_images')
+    .update({ alt_text: altText })
+    .eq('id', imageId)
+    .select('id')
+    .maybeSingle();
+  throwOnProductError(error);
+  if (!data) throw new Error('The photo could not be updated.');
+}
+
+export async function saveProductImagePosition(imageId: string, position: number): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('product_images')
+    .update({ position })
+    .eq('id', imageId)
+    .select('id')
+    .maybeSingle();
+  throwOnProductError(error);
+  if (!data) throw new Error('The photo could not be moved.');
+}
+
+export async function swapProductImages(
+  productId: string,
+  firstImageId: string,
+  secondImageId: string,
+): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('product_images')
+    .select('id, product_id, storage_path, alt_text, position, created_at, updated_at')
+    .eq('product_id', productId)
+    .in('id', [firstImageId, secondImageId]);
+  throwOnProductError(error);
+  if (!data || data.length !== 2) throw new Error('The photos could not be reordered. Refresh and try again.');
+
+  const [first, second] = data;
+  const { error: deleteError } = await adminSupabase
+    .from('product_images')
+    .delete()
+    .eq('product_id', productId)
+    .in('id', [first.id, second.id]);
+  if (deleteError) throwOnProductError(deleteError);
+
+  const { error: insertError } = await adminSupabase.from('product_images').insert([
+    {
+      product_id: productId,
+      storage_path: first.storage_path,
+      alt_text: first.alt_text,
+      position: second.position,
+    },
+    {
+      product_id: productId,
+      storage_path: second.storage_path,
+      alt_text: second.alt_text,
+      position: first.position,
+    },
+  ]);
+  if (!insertError) return;
+
+  const { error: restoreError } = await adminSupabase.from('product_images').insert([
+    {
+      product_id: productId,
+      storage_path: first.storage_path,
+      alt_text: first.alt_text,
+      position: first.position,
+    },
+    {
+      product_id: productId,
+      storage_path: second.storage_path,
+      alt_text: second.alt_text,
+      position: second.position,
+    },
+  ]);
+  if (restoreError) {
+    throw new Error('Photo order could not be saved or restored. Reload the page to see the current order.');
+  }
+  throw new Error('Photo order could not be changed. The previous order was restored.');
+}
+
+export async function removeProductImage(imageId: string): Promise<void> {
+  const { data, error: readError } = await adminSupabase
+    .from('product_images')
+    .select('storage_path')
+    .eq('id', imageId)
+    .maybeSingle();
+  throwOnProductError(readError);
+  if (!data) throw new Error('The photo could not be found.');
+
+  const { data: deleted, error } = await adminSupabase
+    .from('product_images')
+    .delete()
+    .eq('id', imageId)
+    .select('id')
+    .maybeSingle();
+  throwOnProductError(error);
+  if (!deleted) throw new Error('The photo could not be removed.');
+  await removeProductStorageFiles([data.storage_path]);
 }
 
 export type CategoryAdminRow = {
@@ -50,32 +464,35 @@ export async function listCategories(): Promise<CategoryAdminRow[]> {
     throw new Error('The category list could not be loaded.');
   }
 
-  const subcategoryCounts = await Promise.all(subcategoryResult.data.map(async (subcategory) => {
-    const { count, error } = await adminSupabase
+  const countByCategory = new Map<string, number>();
+  const countBySubcategory = new Map<string, number>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await adminSupabase
       .from('products')
-      .select('id', { count: 'exact', head: true })
-      .eq('subcategory_id', subcategory.id);
+      .select('category_id, subcategory_id')
+      .range(from, from + 999);
     throwOnError(error);
-    return [subcategory.id, count ?? 0] as const;
-  }));
-  const countBySubcategory = new Map(subcategoryCounts);
+    if (!data) throw new Error('The category product counts could not be loaded.');
+    for (const product of data) {
+      if (product.category_id) {
+        countByCategory.set(product.category_id, (countByCategory.get(product.category_id) ?? 0) + 1);
+      }
+      if (product.subcategory_id) {
+        countBySubcategory.set(product.subcategory_id, (countBySubcategory.get(product.subcategory_id) ?? 0) + 1);
+      }
+    }
+    if (data.length < 1000) break;
+  }
 
-  return Promise.all(categoryResult.data.map(async (category) => {
-    const { count, error } = await adminSupabase
-      .from('products')
-      .select('id', { count: 'exact', head: true })
-      .eq('category_id', category.id);
-    throwOnError(error);
-    return {
-      category,
-      subcategories: subcategoryResult.data
-        .filter((entry) => entry.category_id === category.id)
-        .map((subcategory) => ({
-          subcategory,
-          productCount: countBySubcategory.get(subcategory.id) ?? 0,
-        })),
-      productCount: count ?? 0,
-    };
+  return categoryResult.data.map((category) => ({
+    category,
+    subcategories: subcategoryResult.data
+      .filter((entry) => entry.category_id === category.id)
+      .map((subcategory) => ({
+        subcategory,
+        productCount: countBySubcategory.get(subcategory.id) ?? 0,
+      })),
+    productCount: countByCategory.get(category.id) ?? 0,
   }));
 }
 

@@ -25,7 +25,9 @@ import {
 } from './admin-components';
 import {
   formatNaira,
+  normalizeWhatsAppNumber,
   parseNaira,
+  parseWholeNumber,
   toLagosDateTimeInput,
   toLagosIso,
   validateCouponForm,
@@ -90,7 +92,7 @@ function CouponForm({ initial, onSave, onCancel }: {
     if (
       initial
       && values.max_redemptions.trim()
-      && Number(values.max_redemptions) < initial.redemption_count
+      && (parseWholeNumber(values.max_redemptions) ?? 0) < initial.redemption_count
     ) {
       validationErrors.max_redemptions = 'The limit cannot be lower than the current redemption count.';
     }
@@ -99,11 +101,16 @@ function CouponForm({ initial, onSave, onCancel }: {
 
     const minimum = values.min_subtotal_ngn.trim() ? parseNaira(values.min_subtotal_ngn) : 0;
     const maximumDiscount = values.max_discount_ngn.trim() ? parseNaira(values.max_discount_ngn) : null;
-    const maxRedemptions = values.max_redemptions.trim() ? Number(values.max_redemptions) : null;
+    const maxRedemptions = values.max_redemptions.trim() ? parseWholeNumber(values.max_redemptions) : null;
     const startsAt = toLagosIso(values.starts_at);
     const expiresAt = toLagosIso(values.expires_at);
-    const parsedValue = Number(values.value);
-    if (minimum === null || (values.max_discount_ngn.trim() && maximumDiscount === null)) {
+    const parsedValue = parseWholeNumber(values.value);
+    if (
+      minimum === null
+      || parsedValue === null
+      || (values.max_redemptions.trim() && maxRedemptions === null)
+      || (values.max_discount_ngn.trim() && maximumDiscount === null)
+    ) {
       toast.error('Enter valid whole-naira amounts.');
       return;
     }
@@ -351,8 +358,9 @@ export function SettingsPage() {
     };
   }, []);
 
+  const normalizedNumber = normalizeWhatsAppNumber(number);
   const numberError = error ?? (number ? validateWhatsAppNumber(number) ?? undefined : undefined);
-  const previewHref = numberError || !number ? undefined : `https://wa.me/${number.trim()}`;
+  const previewHref = numberError || !number ? undefined : `https://wa.me/${normalizedNumber}`;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -361,7 +369,7 @@ export function SettingsPage() {
     if (validationError) return;
     setSaving(true);
     try {
-      await saveWhatsAppNumber(number.trim());
+      await saveWhatsAppNumber(normalizedNumber);
       toast.success('WhatsApp number saved.');
     } catch (saveError) {
       toast.error(errorText(saveError));
@@ -375,7 +383,7 @@ export function SettingsPage() {
       <AdminPageHeader title="Settings" description="Update the public WhatsApp contact used by the storefront." />
       <AdminCard>
         <h2>WhatsApp number</h2>
-        <p className="admin-note">Enter digits only, including the country code. Example: 2348160309308.</p>
+        <p className="admin-note">Enter a Nigerian local number or an international number. Common separators are accepted.</p>
         {loading ? <LoadingState label="Loading store settings…" /> : null}
         {loadError && <p className="admin-alert" role="alert">{loadError}</p>}
         {!loading && !loadError && (
@@ -387,6 +395,8 @@ export function SettingsPage() {
               inputMode="numeric"
               autoComplete="tel"
               value={number}
+              showHintWithError
+              hint={number ? `Will be saved as ${normalizedNumber}` : undefined}
               onChange={(value) => {
                 setNumber(value);
                 setError(undefined);

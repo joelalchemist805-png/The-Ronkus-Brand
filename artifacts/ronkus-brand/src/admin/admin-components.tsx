@@ -18,11 +18,15 @@ export function AdminInput({
   label,
   error,
   hint,
+  showHintWithError = false,
   value,
   onChange,
   ...props
-}: TextFieldProps) {
-  const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
+}: TextFieldProps & { showHintWithError?: boolean }) {
+  const describedBy = [
+    error ? `${id}-error` : undefined,
+    hint && (!error || showHintWithError) ? `${id}-hint` : undefined,
+  ].filter(Boolean).join(' ') || undefined;
   return (
     <div className="admin-field">
       <label htmlFor={id}>{label}</label>
@@ -35,7 +39,7 @@ export function AdminInput({
         aria-describedby={describedBy}
       />
       {error && <span id={`${id}-error`} className="admin-field-error">{error}</span>}
-      {!error && hint && <span id={`${id}-hint`} className="admin-field-hint">{hint}</span>}
+      {hint && (!error || showHintWithError) && <span id={`${id}-hint`} className="admin-field-hint">{hint}</span>}
     </div>
   );
 }
@@ -137,8 +141,16 @@ export function AdminToggle({ id, label, checked, onChange, disabled }: TogglePr
       <input
         id={id}
         type="checkbox"
+        role="switch"
         checked={checked}
         disabled={disabled}
+        aria-checked={checked}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            if (!disabled) onChange(!checked);
+          }
+        }}
         onChange={(event) => onChange(event.target.checked)}
       />
       <span className="admin-toggle-track" aria-hidden="true" />
@@ -199,11 +211,13 @@ export function ConfirmDialog({
   const [open, setOpen] = useState(false);
   const [working, setWorking] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (open && dialogRef.current && !dialogRef.current.open) {
       dialogRef.current.showModal();
     }
+    if (!open) returnFocusRef.current?.focus();
   }, [open]);
 
   const confirm = async () => {
@@ -220,7 +234,16 @@ export function ConfirmDialog({
 
   return (
     <>
-      <span onClick={() => setOpen(true)}>{children}</span>
+      <span
+        onClick={() => {
+          returnFocusRef.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+          setOpen(true);
+        }}
+      >
+        {children}
+      </span>
       {open && (
           <dialog
             ref={dialogRef}

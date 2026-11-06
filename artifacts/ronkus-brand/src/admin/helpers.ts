@@ -15,6 +15,27 @@ export type CouponFormValues = {
 
 export type CouponFieldErrors = Partial<Record<keyof CouponFormValues, string>>;
 
+export type ProductFormValues = {
+  name: string;
+  slug: string;
+  description: string;
+  price_ngn: string;
+  price_suffix: string;
+  category_id: string;
+  subcategory_id: string;
+  audience: 'male' | 'female' | 'unisex';
+  availability: 'ready_to_order' | 'made_to_order' | 'out_of_stock';
+  is_active: boolean;
+  min_order_qty: string;
+  max_order_qty: string;
+  lead_time_days_min: string;
+  lead_time_days_max: string;
+  lead_time_note: string;
+  size_guide_note: string;
+};
+
+export type ProductFieldErrors = Partial<Record<keyof ProductFormValues, string>>;
+
 export function slugify(value: string): string {
   return value
     .normalize('NFKD')
@@ -26,9 +47,113 @@ export function slugify(value: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+export function validateProductForm(values: ProductFormValues): ProductFieldErrors {
+  const maxDatabaseInteger = 2_147_483_647;
+  const errors: ProductFieldErrors = {};
+  const name = values.name.trim();
+  const price = parseNaira(values.price_ngn);
+  const minimumQuantity = parseWholeNumber(values.min_order_qty);
+  const maximumQuantity = values.max_order_qty.trim()
+    ? parseWholeNumber(values.max_order_qty)
+    : null;
+  const minimumLeadTime = values.lead_time_days_min.trim()
+    ? parseWholeNumber(values.lead_time_days_min)
+    : null;
+  const maximumLeadTime = values.lead_time_days_max.trim()
+    ? parseWholeNumber(values.lead_time_days_max)
+    : null;
+
+  if (!name) errors.name = 'Enter a product name.';
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(values.slug.trim())) {
+    errors.slug = 'Use lowercase letters, numbers, and hyphens for the web address.';
+  }
+  if (price === null || price < 0 || price > maxDatabaseInteger) {
+    errors.price_ngn = 'Enter a whole naira amount of zero or more.';
+  }
+  if (values.price_suffix.trim().length > 40) {
+    errors.price_suffix = 'Keep the price suffix to 40 characters or fewer.';
+  }
+  if (!values.category_id) errors.category_id = 'Choose a category.';
+  if (minimumQuantity === null || minimumQuantity < 1 || minimumQuantity > maxDatabaseInteger) {
+    errors.min_order_qty = 'Enter a whole number of at least 1.';
+  }
+  if (
+    values.max_order_qty.trim()
+    && (maximumQuantity === null || maximumQuantity > maxDatabaseInteger)
+  ) {
+    errors.max_order_qty = 'Enter a whole number of zero or more.';
+  } else if (
+    maximumQuantity !== null
+    && minimumQuantity !== null
+    && maximumQuantity < minimumQuantity
+  ) {
+    errors.max_order_qty = 'Maximum quantity must be at least the minimum quantity.';
+  }
+  if (
+    values.lead_time_days_min.trim()
+    && (minimumLeadTime === null || minimumLeadTime < 0 || minimumLeadTime > maxDatabaseInteger)
+  ) {
+    errors.lead_time_days_min = 'Enter a whole number of zero or more.';
+  }
+  if (
+    values.lead_time_days_max.trim()
+    && (maximumLeadTime === null || maximumLeadTime < 0 || maximumLeadTime > maxDatabaseInteger)
+  ) {
+    errors.lead_time_days_max = 'Enter a whole number of zero or more.';
+  } else if (
+    minimumLeadTime !== null
+    && maximumLeadTime !== null
+    && maximumLeadTime < minimumLeadTime
+  ) {
+    errors.lead_time_days_max = 'Maximum lead time must be at least the minimum lead time.';
+  }
+
+  return errors;
+}
+
+export function validateProductImageFile(file: { type: string; size: number }): string | null {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    return 'Choose a JPEG, PNG, or WebP image.';
+  }
+  if (!Number.isFinite(file.size) || file.size < 0 || file.size > 5 * 1024 * 1024) {
+    return 'Choose an image no larger than 5 MB.';
+  }
+  return null;
+}
+
+export function safeProductImageFilename(filename: string): string {
+  const leafName = filename.split(/[\\/]/).pop() ?? '';
+  const extensionMatch = /\.([a-z0-9]+)$/i.exec(leafName);
+  const extension = extensionMatch?.[1].toLowerCase() ?? 'jpg';
+  const basename = extensionMatch ? leafName.slice(0, -extensionMatch[0].length) : leafName;
+  return `${slugify(basename) || 'photo'}.${extension}`;
+}
+
+export function buildProductImageStoragePath(
+  productId: string,
+  filename: string,
+  timestamp = Date.now(),
+): string {
+  const safeTimestamp = Number.isSafeInteger(timestamp) && timestamp >= 0
+    ? timestamp
+    : Date.now();
+  return `products/${productId}/${safeTimestamp}-${safeProductImageFilename(filename)}`;
+}
+
 export function parseNaira(value: string): number | null {
   const normalized = value.trim().replace(/[,\s₦]/g, '');
   if (!/^\d+$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export function parseWholeNumber(
+  text: string,
+  options: { allowNegative?: boolean } = {},
+): number | null {
+  const normalized = text.trim();
+  const pattern = options.allowNegative ? /^-?\d+$/ : /^\d+$/;
+  if (!pattern.test(normalized)) return null;
   const parsed = Number(normalized);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
@@ -38,10 +163,26 @@ export function formatNaira(value: number): string {
   return `₦${new Intl.NumberFormat('en-NG').format(value)}`;
 }
 
-export function validateWhatsAppNumber(value: string): string | null {
-  if (!value) return 'Enter a WhatsApp number.';
-  if (!/^234\d{10}$/.test(value)) {
-    return 'Use digits only, including the country code (for example 2348160309308).';
+export function normalizeWhatsAppNumber(input: string): string {
+  const normalized = input
+    .trim()
+    .replace(/[\s.\-()[\]{}]/g, '')
+    .replace(/^\+/, '')
+    .replace(/^00/, '');
+  return /^0\d{10}$/.test(normalized) ? `234${normalized.slice(1)}` : normalized;
+}
+
+export function validateWhatsAppNumber(input: string): string | null {
+  const normalized = normalizeWhatsAppNumber(input);
+  if (!normalized) return 'Enter a WhatsApp number.';
+  if (!/^\d+$/.test(normalized)) {
+    return 'Enter 8 to 15 digits, starting with 1 to 9.';
+  }
+  if (normalized.startsWith('2340')) {
+    return 'Remove the 0 after 234 (for example 2348160309308).';
+  }
+  if (normalized.length < 8 || normalized.length > 15 || !/^[1-9]/.test(normalized)) {
+    return 'Enter 8 to 15 digits, starting with 1 to 9.';
   }
   return null;
 }
@@ -73,17 +214,17 @@ export function toLagosDateTimeInput(value: string | null): string {
 
 function isOptionalInteger(value: string, minimum: number, asNaira = false): boolean {
   if (!value.trim()) return true;
-  const parsed = asNaira ? parseNaira(value) : Number(value);
+  const parsed = asNaira ? parseNaira(value) : parseWholeNumber(value);
   return parsed !== null && Number.isSafeInteger(parsed) && parsed >= minimum;
 }
 
 export function validateCouponForm(values: CouponFormValues): CouponFieldErrors {
   const errors: CouponFieldErrors = {};
   const code = values.code.trim();
-  const parsedValue = Number(values.value);
+  const parsedValue = parseWholeNumber(values.value);
 
   if (!code) errors.code = 'Enter a coupon code.';
-  if (!Number.isSafeInteger(parsedValue) || parsedValue < 1) {
+  if (parsedValue === null || parsedValue < 1) {
     errors.value = 'Enter a whole number greater than zero.';
   } else if (values.discount_type === 'percent' && parsedValue > 100) {
     errors.value = 'A percentage must be between 1 and 100.';

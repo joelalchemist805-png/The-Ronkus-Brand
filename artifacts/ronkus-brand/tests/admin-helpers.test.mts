@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildProductImageStoragePath,
   formatNaira,
+  normalizeWhatsAppNumber,
   parseNaira,
+  parseWholeNumber,
+  safeProductImageFilename,
   slugify,
   toLagosIso,
   validateCouponForm,
+  validateProductForm,
+  validateProductImageFile,
   validateWhatsAppNumber,
   type CouponFormValues,
+  type ProductFormValues,
 } from '../src/admin/helpers.ts';
 
 function couponValues(overrides: Partial<CouponFormValues> = {}): CouponFormValues {
@@ -26,9 +33,79 @@ function couponValues(overrides: Partial<CouponFormValues> = {}): CouponFormValu
   };
 }
 
+function productValues(overrides: Partial<ProductFormValues> = {}): ProductFormValues {
+  return {
+    name: 'Café & Co. Leather Bag',
+    slug: 'cafe-co-leather-bag',
+    description: '',
+    price_ngn: '0',
+    price_suffix: '',
+    category_id: 'category-id',
+    subcategory_id: '',
+    audience: 'unisex',
+    availability: 'ready_to_order',
+    is_active: true,
+    min_order_qty: '1',
+    max_order_qty: '',
+    lead_time_days_min: '',
+    lead_time_days_max: '',
+    lead_time_note: '',
+    size_guide_note: '',
+    ...overrides,
+  };
+}
+
 test('slugify lowercases and hyphenates names consistently', () => {
   assert.equal(slugify('  Bags & Totes  '), 'bags-totes');
   assert.equal(slugify('Café / Head Wraps'), 'cafe-head-wraps');
+});
+
+test('product validation requires a name and a non-negative whole naira price', () => {
+  assert.deepEqual(validateProductForm(productValues()), {});
+  const errors = validateProductForm(productValues({
+    name: '  ',
+    price_ngn: '1.50',
+  }));
+  assert.ok(errors.name);
+  assert.ok(errors.price_ngn);
+  assert.ok(validateProductForm(productValues({ price_ngn: '2147483648' })).price_ngn);
+});
+
+test('product validation enforces minimums and max-versus-min quantity and lead-time rules', () => {
+  const minimumErrors = validateProductForm(productValues({ min_order_qty: '0' }));
+  const quantityErrors = validateProductForm(productValues({
+    min_order_qty: '4',
+    max_order_qty: '2',
+  }));
+  const leadTimeErrors = validateProductForm(productValues({
+    lead_time_days_min: '5',
+    lead_time_days_max: '3',
+  }));
+  assert.ok(minimumErrors.min_order_qty);
+  assert.ok(quantityErrors.max_order_qty);
+  assert.ok(leadTimeErrors.lead_time_days_max);
+  assert.deepEqual(validateProductForm(productValues({
+    lead_time_days_min: '0',
+    lead_time_days_max: '0',
+  })), {});
+});
+
+test('product slug and image storage names handle punctuation and accents safely', () => {
+  assert.equal(slugify('  Étoile / Café & Co.!  '), 'etoile-cafe-co');
+  assert.equal(safeProductImageFilename('Café & Table (MAIN).JPG'), 'cafe-table-main.jpg');
+  assert.equal(
+    buildProductImageStoragePath('product-id', 'Café & Table (MAIN).webp', 123),
+    'products/product-id/123-cafe-table-main.webp',
+  );
+});
+
+test('product image validation accepts only supported formats and a maximum 5 MB', () => {
+  assert.equal(validateProductImageFile({ type: 'image/jpeg', size: 5 * 1024 * 1024 }), null);
+  assert.equal(validateProductImageFile({ type: 'image/gif', size: 10 }), 'Choose a JPEG, PNG, or WebP image.');
+  assert.equal(
+    validateProductImageFile({ type: 'image/png', size: 5 * 1024 * 1024 + 1 }),
+    'Choose an image no larger than 5 MB.',
+  );
 });
 
 test('naira helpers parse whole amounts and format them for display', () => {
@@ -38,6 +115,18 @@ test('naira helpers parse whole amounts and format them for display', () => {
   assert.equal(parseNaira('not money'), null);
   assert.equal(formatNaira(12345), '₦12,345');
   assert.equal(formatNaira(-1), '');
+});
+
+test('whole-number parsing accepts only trimmed safe integers', () => {
+  assert.equal(parseWholeNumber('12'), 12);
+  assert.equal(parseWholeNumber(' 12 '), 12);
+  assert.equal(parseWholeNumber('1e3'), null);
+  assert.equal(parseWholeNumber('0x10'), null);
+  assert.equal(parseWholeNumber('-5'), null);
+  assert.equal(parseWholeNumber('-5', { allowNegative: true }), -5);
+  assert.equal(parseWholeNumber(''), null);
+  assert.equal(parseWholeNumber('1.5'), null);
+  assert.equal(parseWholeNumber('9007199254740992'), null);
 });
 
 test('coupon validation accepts valid percentage coupons and Lagos dates', () => {
@@ -64,10 +153,29 @@ test('fixed coupons cannot set a percentage-only maximum discount', () => {
   assert.ok(errors.max_discount_ngn);
 });
 
-test('WhatsApp number validation requires digits and an international country code', () => {
+test('WhatsApp numbers normalize local and international formats', () => {
+  assert.equal(normalizeWhatsAppNumber('08160309308'), '2348160309308');
+  assert.equal(normalizeWhatsAppNumber('+234 816 030 9308'), '2348160309308');
+  assert.equal(normalizeWhatsAppNumber('0816-030-9308'), '2348160309308');
+  assert.equal(normalizeWhatsAppNumber('(0816).030 [9308]'), '2348160309308');
+  assert.equal(normalizeWhatsAppNumber('2348160309308'), '2348160309308');
+  assert.equal(normalizeWhatsAppNumber('00 234 816 030 9308'), '2348160309308');
+  assert.equal(normalizeWhatsAppNumber('2340816030930'), '2340816030930');
+});
+
+test('WhatsApp validation accepts valid normalized numbers and rejects invalid ones', () => {
+  assert.equal(validateWhatsAppNumber('08160309308'), null);
+  assert.equal(validateWhatsAppNumber('+234 816 030 9308'), null);
+  assert.equal(validateWhatsAppNumber('0816-030-9308'), null);
   assert.equal(validateWhatsAppNumber('2348160309308'), null);
-  assert.ok(validateWhatsAppNumber('08160309308'));
-  assert.ok(validateWhatsAppNumber('+2348160309308'));
-  assert.ok(validateWhatsAppNumber('234 816 030 9308'));
-  assert.ok(validateWhatsAppNumber(' 2348160309308 '));
+  assert.equal(validateWhatsAppNumber('00 234 816 030 9308'), null);
+  assert.equal(
+    validateWhatsAppNumber('2340816030930'),
+    'Remove the 0 after 234 (for example 2348160309308).',
+  );
+  assert.equal(validateWhatsAppNumber('447700900123'), null);
+  assert.ok(validateWhatsAppNumber('1234567'));
+  assert.ok(validateWhatsAppNumber('1234567890123456'));
+  assert.ok(validateWhatsAppNumber('234abc'));
+  assert.equal(validateWhatsAppNumber(''), 'Enter a WhatsApp number.');
 });
