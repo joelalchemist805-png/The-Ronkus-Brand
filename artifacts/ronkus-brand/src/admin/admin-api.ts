@@ -1,7 +1,7 @@
 import type { Database } from '@/lib/db-types';
 import type { Json } from '@/lib/db-types';
 import { adminSupabase } from './admin-supabase';
-import { buildProductImageStoragePath } from './helpers';
+import { buildProductImageStoragePath, buildPromoFlyerStoragePath } from './helpers';
 
 export type Category = Database['public']['Tables']['categories']['Row'];
 export type Subcategory = Database['public']['Tables']['subcategories']['Row'];
@@ -10,6 +10,15 @@ export type Coupon = Database['public']['Tables']['coupons']['Row'];
 export type StoreSetting = Database['public']['Tables']['store_settings']['Row'];
 export type Product = Database['public']['Tables']['products']['Row'];
 export type ProductImage = Database['public']['Tables']['product_images']['Row'];
+export type PromoBanner = Database['public']['Tables']['promo_banners']['Row'];
+export type FeaturedProduct = Pick<
+  Product,
+  'id' | 'name' | 'price_ngn' | 'price_suffix' | 'availability' | 'is_active' | 'is_featured' | 'featured_position'
+> & { photoUrl: string | null };
+export type PromoBannerWrite = Pick<
+  PromoBanner,
+  'mode' | 'title' | 'message' | 'coupon_id' | 'image_path' | 'image_alt' | 'link_url' | 'starts_at' | 'ends_at' | 'is_active'
+>;
 export type ProductWrite = Pick<
   Product,
   | 'slug'
@@ -128,12 +137,176 @@ function throwOnProductError(error: AdminError | null): void {
   if (error) throw new Error(friendlyProductError(error));
 }
 
+function throwOnPromoError(error: AdminError | null): void {
+  if (!error) return;
+  switch (error.code) {
+    case '23514':
+      throw new Error('The banner does not meet the content or date rules. Check its mode, required content, and date window.');
+    case '23503':
+      throw new Error('The selected coupon is no longer available. Refresh the coupon list and try again.');
+    case '42501':
+      throw new Error('You do not have permission to manage promotions.');
+    default:
+      throw new Error(friendlyAdminError(error));
+  }
+}
+
 function publicProductImageUrl(path: string): string {
   return adminSupabase.storage.from('product-images').getPublicUrl(path).data.publicUrl;
 }
 
 export function getProductImageUrl(path: string): string {
   return publicProductImageUrl(path);
+}
+
+export function getPromoFlyerUrl(path: string): string {
+  return adminSupabase.storage.from('promo-flyers').getPublicUrl(path).data.publicUrl;
+}
+
+export async function listFeaturedProducts(): Promise<FeaturedProduct[]> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .select('id, name, price_ngn, price_suffix, availability, is_active, is_featured, featured_position')
+    .eq('is_featured', true)
+    .order('featured_position', { ascending: true, nullsFirst: false })
+    .order('name');
+  throwOnProductError(error);
+  if (!data) throw new Error('Featured products could not be loaded.');
+  if (data.length === 0) return [];
+
+  const { data: images, error: imageError } = await adminSupabase
+    .from('product_images')
+    .select('product_id, storage_path')
+    .in('product_id', data.map(({ id }) => id))
+    .eq('position', 1);
+  throwOnProductError(imageError);
+  if (!images) throw new Error('Featured product photos could not be loaded.');
+  const photoPaths = new Map(images.map((image) => [image.product_id, image.storage_path]));
+  return data.map((product) => ({
+    ...product,
+    photoUrl: photoPaths.has(product.id) ? publicProductImageUrl(photoPaths.get(product.id)!) : null,
+  }));
+}
+
+export async function listAvailableFeaturedProducts(): Promise<FeaturedProduct[]> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .select('id, name, price_ngn, price_suffix, availability, is_active, is_featured, featured_position')
+    .eq('is_active', true)
+    .eq('is_featured', false)
+    .order('name');
+  throwOnProductError(error);
+  if (!data) throw new Error('Available products could not be loaded.');
+  return data.map((product) => ({ ...product, photoUrl: null }));
+}
+
+export async function setFeaturedProduct(
+  id: string,
+  values: Pick<Product, 'is_featured' | 'featured_position'>,
+): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .update(values)
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+  throwOnProductError(error);
+  if (!data) throw new Error('The product could not be updated. Refresh and try again.');
+}
+
+export async function saveFeaturedPositions(
+  positions: readonly { id: string; featured_position: number }[],
+): Promise<void> {
+  for (const { id, featured_position } of positions) {
+    const { data, error } = await adminSupabase
+      .from('products')
+      .update({ featured_position })
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    throwOnProductError(error);
+    if (!data) throw new Error('A product position could not be saved. Refresh and try again.');
+  }
+}
+
+export async function listPromoBanners(): Promise<PromoBanner[]> {
+  const { data, error } = await adminSupabase
+    .from('promo_banners')
+    .select('*')
+    .order('created_at', { ascending: false });
+  throwOnPromoError(error);
+  if (!data) throw new Error('Promotional banners could not be loaded.');
+  return data;
+}
+
+export async function getActivePromoBannerNow(): Promise<Database['public']['Functions']['get_active_promo_banner']['Returns'][number] | null> {
+  const { data, error } = await adminSupabase.rpc('get_active_promo_banner');
+  throwOnPromoError(error);
+  if (!data) throw new Error('The current storefront banner could not be loaded.');
+  return data[0] ?? null;
+}
+
+export async function savePromoBanner(values: PromoBannerWrite, id?: string): Promise<void> {
+  if (id) {
+    const { data, error } = await adminSupabase
+      .from('promo_banners')
+      .update(values)
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    throwOnPromoError(error);
+    if (!data) throw new Error('The banner could not be found. Refresh and try again.');
+    return;
+  }
+  const { error } = await adminSupabase.from('promo_banners').insert(values);
+  throwOnPromoError(error);
+}
+
+export async function deactivatePromoBanner(id: string): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('promo_banners')
+    .update({ is_active: false })
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+  throwOnPromoError(error);
+  if (!data) throw new Error('The banner could not be found. Refresh and try again.');
+}
+
+export async function deletePromoBanner(id: string): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('promo_banners')
+    .delete()
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+  throwOnPromoError(error);
+  if (!data) throw new Error('The banner could not be found. Refresh and try again.');
+}
+
+export async function uploadPromoFlyer(file: File): Promise<string> {
+  const path = buildPromoFlyerStoragePath(file.name, crypto.randomUUID());
+  try {
+    const { error } = await adminSupabase.storage
+      .from('promo-flyers')
+      .upload(path, file, { contentType: file.type, upsert: false });
+    if (error) throw new Error('The flyer could not be uploaded. Please try again.');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'The flyer could not be uploaded. Please try again.') {
+      throw error;
+    }
+    throw new Error('The flyer could not be uploaded. Please try again.');
+  }
+  return path;
+}
+
+export async function removePromoFlyer(path: string): Promise<void> {
+  try {
+    const { error } = await adminSupabase.storage.from('promo-flyers').remove([path]);
+    if (error) console.warn('Could not delete a promotional flyer from storage.');
+  } catch {
+    console.warn('Could not delete a promotional flyer from storage.');
+  }
 }
 
 function warnStorageCleanup(): void {

@@ -25,6 +25,7 @@ import {
 } from './admin-components';
 import {
   formatNaira,
+  formatLagosDateTime,
   normalizeWhatsAppNumber,
   parseNaira,
   parseWholeNumber,
@@ -38,17 +39,6 @@ import {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
-}
-
-function formatLagosDate(value: string | null): string {
-  if (!value) return 'No date set';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Invalid date';
-  return new Intl.DateTimeFormat('en-NG', {
-    timeZone: 'Africa/Lagos',
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
 }
 
 function initialCouponValues(coupon: Coupon | null): CouponFormValues {
@@ -301,8 +291,8 @@ export function CouponsPage() {
             <span className={`admin-status ${coupon.is_active ? 'is-active' : ''}`}>{coupon.is_active ? 'Active' : 'Inactive'}</span>
           </div>
           <dl className="admin-detail-grid">
-            <div><dt>Starts</dt><dd>{formatLagosDate(coupon.starts_at)}</dd></div>
-            <div><dt>Expires</dt><dd>{formatLagosDate(coupon.expires_at)}</dd></div>
+            <div><dt>Starts</dt><dd>{formatLagosDateTime(coupon.starts_at)}</dd></div>
+            <div><dt>Expires</dt><dd>{formatLagosDateTime(coupon.expires_at)}</dd></div>
             <div><dt>Minimum</dt><dd>{formatNaira(coupon.min_subtotal_ngn)}</dd></div>
             <div><dt>Redemption limit</dt><dd>{coupon.max_redemptions ?? 'Unlimited'}</dd></div>
           </dl>

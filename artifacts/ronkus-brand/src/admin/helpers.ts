@@ -36,6 +36,20 @@ export type ProductFormValues = {
 
 export type ProductFieldErrors = Partial<Record<keyof ProductFormValues, string>>;
 
+export type PromoBannerFormValues = {
+  mode: 'flyer' | 'message';
+  title: string;
+  message: string;
+  image_alt: string;
+  coupon_id: string;
+  link_url: string;
+  starts_at: string;
+  ends_at: string;
+  is_active: boolean;
+};
+
+export type PromoBannerFieldErrors = Partial<Record<keyof PromoBannerFormValues | 'image', string>>;
+
 export function slugify(value: string): string {
   return value
     .normalize('NFKD')
@@ -210,6 +224,109 @@ export function toLagosDateTimeInput(value: string | null): string {
   const part = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((entry) => entry.type === type)?.value ?? '';
   return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}`;
+}
+
+export function formatLagosDateTime(value: string | null): string {
+  if (!value) return 'No date set';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Invalid date';
+  return new Intl.DateTimeFormat('en-NG', {
+    timeZone: 'Africa/Lagos',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+export function validatePromoLinkUrl(value: string): string | null {
+  const url = value.trim();
+  if (!url || url === '/' || /^\/[^/]/.test(url) || /^https:\/\//.test(url)) return null;
+  return 'Use /, a path beginning with one /, or a full https:// URL.';
+}
+
+export function validatePromoBannerForm(
+  values: PromoBannerFormValues,
+  hasFlyerImage: boolean,
+): PromoBannerFieldErrors {
+  const errors: PromoBannerFieldErrors = {};
+  if (values.mode === 'flyer') {
+    if (!hasFlyerImage) errors.image = 'Choose a flyer image.';
+    if (Array.from(values.image_alt).length > 160) errors.image_alt = 'Keep image alt text to 160 characters or fewer.';
+  } else {
+    if (!values.title.trim()) errors.title = 'Enter a banner title.';
+    if (Array.from(values.title).length > 80) errors.title = 'Keep the title to 80 characters or fewer.';
+    if (Array.from(values.message).length > 200) errors.message = 'Keep the message to 200 characters or fewer.';
+  }
+  const linkError = validatePromoLinkUrl(values.link_url);
+  if (linkError) errors.link_url = linkError;
+
+  const startsAt = toLagosIso(values.starts_at);
+  const endsAt = toLagosIso(values.ends_at);
+  if (values.starts_at && !startsAt) errors.starts_at = 'Enter a valid start date and time.';
+  if (values.ends_at && !endsAt) errors.ends_at = 'Enter a valid end date and time.';
+  if (startsAt && endsAt && new Date(endsAt) <= new Date(startsAt)) {
+    errors.ends_at = 'End date and time must be after the start.';
+  }
+  return errors;
+}
+
+export function getPromoBannerStatus(
+  isActive: boolean,
+  startsAt: string | null,
+  endsAt: string | null,
+  now: Date = new Date(),
+): 'Live now' | 'Scheduled' | 'Expired' | 'Inactive' {
+  if (!isActive) return 'Inactive';
+  if (startsAt && new Date(startsAt).getTime() > now.getTime()) return 'Scheduled';
+  if (endsAt && new Date(endsAt).getTime() <= now.getTime()) return 'Expired';
+  return 'Live now';
+}
+
+export function getQualifyingPromoBanners<
+  Banner extends {
+    created_at: string;
+    coupon_id: string | null;
+    ends_at: string | null;
+    is_active: boolean;
+    starts_at: string | null;
+  },
+  CouponRecord extends {
+    expires_at: string | null;
+    id: string;
+    is_active: boolean;
+    max_redemptions: number | null;
+    redemption_count: number;
+    starts_at: string | null;
+  },
+>(
+  banners: readonly Banner[],
+  coupons: readonly CouponRecord[],
+  now: Date = new Date(),
+): Banner[] {
+  const couponsById = new Map(coupons.map((coupon) => [coupon.id, coupon]));
+  return banners
+    .filter((banner) => {
+      if (getPromoBannerStatus(banner.is_active, banner.starts_at, banner.ends_at, now) !== 'Live now') {
+        return false;
+      }
+      if (!banner.coupon_id) return true;
+      const coupon = couponsById.get(banner.coupon_id);
+      if (!coupon?.is_active) return false;
+      if (coupon.starts_at && new Date(coupon.starts_at).getTime() > now.getTime()) return false;
+      if (coupon.expires_at && new Date(coupon.expires_at).getTime() <= now.getTime()) return false;
+      return coupon.max_redemptions === null || coupon.redemption_count < coupon.max_redemptions;
+    })
+    .sort((first, second) => new Date(second.created_at).getTime() - new Date(first.created_at).getTime());
+}
+
+export function renumberFeaturedPositions<T extends { id: string }>(
+  products: readonly T[],
+): (T & { featured_position: number })[] {
+  return products.map((product, index) => ({ ...product, featured_position: index + 1 }));
+}
+
+export function buildPromoFlyerStoragePath(filename: string, identifier = String(Date.now())): string {
+  const safeIdentifier = identifier.replace(/[^a-zA-Z0-9_-]/g, '') || String(Date.now());
+  return `promotions/${safeIdentifier}-${safeProductImageFilename(filename)}`;
 }
 
 function isOptionalInteger(value: string, minimum: number, asNaira = false): boolean {

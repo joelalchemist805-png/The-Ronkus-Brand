@@ -10,6 +10,8 @@ const ProductsPage = lazy(() => import('./product-pages').then((module) => ({ de
 const ProductFormPage = lazy(() => import('./product-pages').then((module) => ({ default: module.ProductFormPage })));
 const CouponsPage = lazy(() => import('./coupon-pages').then((module) => ({ default: module.CouponsPage })));
 const SettingsPage = lazy(() => import('./coupon-pages').then((module) => ({ default: module.SettingsPage })));
+const FeaturedPage = lazy(() => import('./featured-page').then((module) => ({ default: module.FeaturedPage })));
+const PromotionsPage = lazy(() => import('./promotions-page').then((module) => ({ default: module.PromotionsPage })));
 
 const navigation = [
   { path: '/admin', label: 'Home', soon: false },
@@ -18,9 +20,9 @@ const navigation = [
   { path: '/admin/coupons', label: 'Coupons', soon: false },
   { path: '/admin/settings', label: 'Settings', soon: false },
   { path: '/admin/products', label: 'Products', soon: false },
-  { path: '/admin/featured', label: 'Featured', soon: true },
+  { path: '/admin/featured', label: 'Featured', soon: false },
   { path: '/admin/orders', label: 'Orders', soon: true },
-  { path: '/admin/promotions', label: 'Promotions', soon: true },
+  { path: '/admin/promotions', label: 'Promotions', soon: false },
 ] as const;
 
 const failedAttemptsStorageKey = 'ronkus-admin-failed-attempts';
@@ -300,6 +302,10 @@ function AdminShell() {
           ? <CouponsPage />
           : path === '/admin/settings'
             ? <SettingsPage />
+            : path === '/admin/featured'
+              ? <FeaturedPage />
+              : path === '/admin/promotions'
+                ? <PromotionsPage />
             : path === '/admin/products'
               ? <ProductsPage onNavigate={navigate} />
               : path === '/admin/products/new'
