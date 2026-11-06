@@ -1,4 +1,5 @@
 import type { Database } from '@/lib/db-types';
+import type { Json } from '@/lib/db-types';
 import { adminSupabase } from './admin-supabase';
 import { buildProductImageStoragePath } from './helpers';
 
@@ -27,6 +28,28 @@ export type ProductWrite = Pick<
   | 'lead_time_days_max'
   | 'lead_time_note'
   | 'size_guide_note'
+>;
+export type ProductConfiguration = Pick<
+  Product,
+  | 'options'
+  | 'custom_request_enabled'
+  | 'custom_request_button_label'
+  | 'custom_request_flow'
+  | 'custom_request_fee_ngn'
+  | 'custom_request_notice'
+  | 'needed_by_mode'
+  | 'custom_request_fields'
+>;
+export type ProductOptionsWrite = Pick<ProductConfiguration, 'options'>;
+export type CustomOrderWrite = Pick<
+  ProductConfiguration,
+  | 'custom_request_enabled'
+  | 'custom_request_button_label'
+  | 'custom_request_flow'
+  | 'custom_request_fee_ngn'
+  | 'custom_request_notice'
+  | 'needed_by_mode'
+  | 'custom_request_fields'
 >;
 
 export type ProductListItem = Pick<
@@ -239,6 +262,64 @@ export async function updateProduct(id: string, values: ProductWrite): Promise<v
     .select('id')
     .maybeSingle();
   throwOnProductSlugError(error);
+  if (!data) throw new Error('Product not found.');
+}
+
+export async function getProductConfiguration(id: string): Promise<ProductConfiguration | null> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .select(
+      'options, custom_request_enabled, custom_request_button_label, custom_request_flow, custom_request_fee_ngn, custom_request_notice, needed_by_mode, custom_request_fields',
+    )
+    .eq('id', id)
+    .maybeSingle();
+  throwOnProductError(error);
+  return data;
+}
+
+export async function validateOptionsWithDatabase(options: ProductConfiguration['options']): Promise<void> {
+  const { data, error } = await adminSupabase.rpc('validate_product_options', {
+    options: options as Json,
+  });
+  throwOnProductError(error);
+  if (data !== true) throw new Error('Review the Options section; the database rejected its settings.');
+}
+
+export async function validateCustomFieldsWithDatabase(
+  fields: ProductConfiguration['custom_request_fields'],
+): Promise<void> {
+  const { data, error } = await adminSupabase.rpc('validate_custom_request_fields', {
+    fields: fields as Json,
+  });
+  throwOnProductError(error);
+  if (data !== true) throw new Error('Review the Custom orders section; the database rejected its fields.');
+}
+
+export async function updateProductOptions(id: string, values: ProductOptionsWrite): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .update(values)
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+  if (error?.code === '23514') {
+    throw new Error('Some option or custom-order settings are not valid. Review the Options section.');
+  }
+  throwOnProductError(error);
+  if (!data) throw new Error('Product not found.');
+}
+
+export async function updateProductCustomOrder(id: string, values: CustomOrderWrite): Promise<void> {
+  const { data, error } = await adminSupabase
+    .from('products')
+    .update(values)
+    .eq('id', id)
+    .select('id')
+    .maybeSingle();
+  if (error?.code === '23514') {
+    throw new Error('Some option or custom-order settings are not valid. Review the Custom orders section.');
+  }
+  throwOnProductError(error);
   if (!data) throw new Error('Product not found.');
 }
 

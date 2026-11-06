@@ -46,6 +46,7 @@ import {
   type ProductFieldErrors,
   type ProductFormValues,
 } from './helpers';
+import { ProductConfigEditor } from './product-config-editor';
 
 type NavigateHandler = (event: ReactMouseEvent<HTMLAnchorElement>) => void;
 type NavigateTo = (path: string) => void;
@@ -328,8 +329,13 @@ export function ProductFormPage({
   const [orderCheckFailed, setOrderCheckFailed] = useState(false);
   const [slugEdited, setSlugEdited] = useState(Boolean(id));
   const [photosDirty, setPhotosDirty] = useState(false);
+  const [configDirty, setConfigDirty] = useState(false);
 
-  const isDirty = !loading && (JSON.stringify(values) !== JSON.stringify(initialValues) || photosDirty);
+  const isDirty = !loading && (
+    JSON.stringify(values) !== JSON.stringify(initialValues)
+    || photosDirty
+    || configDirty
+  );
 
   useEffect(() => {
     onDirtyChange(isDirty);
@@ -683,6 +689,7 @@ export function ProductFormPage({
 
       {id && (
         <>
+          <ProductConfigEditor productId={id} onDirtyChange={setConfigDirty} />
           <ProductPhotos productId={id} productName={values.name} onDirtyChange={setPhotosDirty} />
           <AdminCard className="admin-product-danger-zone">
             <h2>Storefront and deletion</h2>
