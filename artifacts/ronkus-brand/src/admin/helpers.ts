@@ -177,8 +177,96 @@ export function parseWholeNumber(
 }
 
 export function formatNaira(value: number): string {
-  if (!Number.isSafeInteger(value) || value < 0) return '';
-  return `₦${new Intl.NumberFormat('en-NG').format(value)}`;
+  if (!Number.isFinite(value) || value < 0) return '';
+  return `₦${new Intl.NumberFormat('en-NG', {
+    maximumFractionDigits: 2,
+  }).format(value)}`;
+}
+
+export type AnalyticsDatePreset = 'today' | 'last7Days' | 'last30Days' | 'thisMonth' | 'custom';
+
+export type AnalyticsDateRange = {
+  from: string;
+  to: string;
+};
+
+export type SalesChartDatum = {
+  day: string;
+  orderCount: number;
+  revenueNgn: number;
+};
+
+function getLagosDate(value: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((entry) => entry.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+function shiftDate(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function isDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+export function getAnalyticsDateRange(
+  preset: AnalyticsDatePreset,
+  now: Date = new Date(),
+  customFrom = '',
+  customTo = '',
+): AnalyticsDateRange {
+  if (preset === 'custom') return { from: customFrom, to: customTo };
+
+  const today = getLagosDate(now);
+  switch (preset) {
+    case 'last7Days':
+      return { from: shiftDate(today, -6), to: today };
+    case 'last30Days':
+      return { from: shiftDate(today, -29), to: today };
+    case 'thisMonth':
+      return { from: `${today.slice(0, 7)}-01`, to: today };
+    case 'today':
+      return { from: today, to: today };
+  }
+}
+
+export function isValidAnalyticsDateRange(from: string, to: string): boolean {
+  if (!isDateOnly(from) || !isDateOnly(to) || to < from) return false;
+  const dayDifference = (
+    new Date(`${to}T00:00:00.000Z`).getTime()
+    - new Date(`${from}T00:00:00.000Z`).getTime()
+  ) / 86_400_000;
+  return dayDifference <= 366;
+}
+
+export function buildSalesChartData(
+  rows: readonly SalesChartDatum[],
+  from: string,
+  to: string,
+): SalesChartDatum[] {
+  if (!isValidAnalyticsDateRange(from, to)) return [];
+  const rowsByDay = new Map(rows.map((row) => [row.day, row]));
+  const result: SalesChartDatum[] = [];
+  for (let day = from; day <= to; day = shiftDate(day, 1)) {
+    const row = rowsByDay.get(day);
+    result.push({
+      day,
+      orderCount: row && Number.isFinite(row.orderCount) ? row.orderCount : 0,
+      revenueNgn: row && Number.isFinite(row.revenueNgn) ? row.revenueNgn : 0,
+    });
+  }
+  return result;
 }
 
 export function normalizeWhatsAppNumber(input: string): string {

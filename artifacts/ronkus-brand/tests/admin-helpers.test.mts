@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildProductImageStoragePath,
+  buildSalesChartData,
   formatNaira,
+  getAnalyticsDateRange,
+  isValidAnalyticsDateRange,
   isInactivityExpired,
   normalizeWhatsAppNumber,
   parseNaira,
@@ -131,7 +134,58 @@ test('naira helpers parse whole amounts and format them for display', () => {
   assert.equal(parseNaira('12.50'), null);
   assert.equal(parseNaira('not money'), null);
   assert.equal(formatNaira(12345), '₦12,345');
+  assert.equal(formatNaira(1_234_567_890_123), '₦1,234,567,890,123');
+  assert.equal(formatNaira(12345.5), '₦12,345.5');
   assert.equal(formatNaira(-1), '');
+});
+
+test('analytics date presets use Lagos calendar dates and inclusive preset ranges', () => {
+  const acrossUtcMonthBoundary = new Date('2026-03-31T23:30:00.000Z');
+  assert.deepEqual(getAnalyticsDateRange('today', acrossUtcMonthBoundary), {
+    from: '2026-04-01',
+    to: '2026-04-01',
+  });
+  assert.deepEqual(getAnalyticsDateRange('last7Days', acrossUtcMonthBoundary), {
+    from: '2026-03-26',
+    to: '2026-04-01',
+  });
+  assert.deepEqual(getAnalyticsDateRange('last30Days', acrossUtcMonthBoundary), {
+    from: '2026-03-03',
+    to: '2026-04-01',
+  });
+  assert.deepEqual(getAnalyticsDateRange('thisMonth', acrossUtcMonthBoundary), {
+    from: '2026-04-01',
+    to: '2026-04-01',
+  });
+  assert.deepEqual(getAnalyticsDateRange('custom', new Date(), '2026-02-28', '2026-03-01'), {
+    from: '2026-02-28',
+    to: '2026-03-01',
+  });
+  assert.equal(getAnalyticsDateRange('today', new Date('2026-04-30T22:59:00.000Z')).to, '2026-04-30');
+  assert.equal(getAnalyticsDateRange('today', new Date('2026-04-30T23:00:00.000Z')).to, '2026-05-01');
+});
+
+test('analytics date ranges reject invalid, reversed, or overlong ranges', () => {
+  assert.equal(isValidAnalyticsDateRange('2026-02-28', '2026-03-01'), true);
+  assert.equal(isValidAnalyticsDateRange('2026-02-30', '2026-03-01'), false);
+  assert.equal(isValidAnalyticsDateRange('2026-03-01', '2026-02-28'), false);
+  assert.equal(isValidAnalyticsDateRange('2025-01-01', '2026-01-03'), false);
+});
+
+test('sales chart data fills missing days and handles empty results', () => {
+  assert.deepEqual(buildSalesChartData([
+    { day: '2026-04-01', orderCount: 2, revenueNgn: 15_000 },
+    { day: '2026-04-03', orderCount: 1, revenueNgn: 8_000 },
+  ], '2026-04-01', '2026-04-04'), [
+    { day: '2026-04-01', orderCount: 2, revenueNgn: 15_000 },
+    { day: '2026-04-02', orderCount: 0, revenueNgn: 0 },
+    { day: '2026-04-03', orderCount: 1, revenueNgn: 8_000 },
+    { day: '2026-04-04', orderCount: 0, revenueNgn: 0 },
+  ]);
+  assert.deepEqual(buildSalesChartData([], '2026-04-01', '2026-04-02'), [
+    { day: '2026-04-01', orderCount: 0, revenueNgn: 0 },
+    { day: '2026-04-02', orderCount: 0, revenueNgn: 0 },
+  ]);
 });
 
 test('whole-number parsing accepts only trimmed safe integers', () => {

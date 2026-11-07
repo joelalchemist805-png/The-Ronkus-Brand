@@ -14,6 +14,7 @@ const SettingsPage = lazy(() => import('./coupon-pages').then((module) => ({ def
 const FeaturedPage = lazy(() => import('./featured-page').then((module) => ({ default: module.FeaturedPage })));
 const PromotionsPage = lazy(() => import('./promotions-page').then((module) => ({ default: module.PromotionsPage })));
 const OrdersPage = lazy(() => import('./orders-page').then((module) => ({ default: module.OrdersPage })));
+const OverviewPage = lazy(() => import('./overview-page'));
 
 const navigation = [
   { path: '/admin', label: 'Home', soon: false },
@@ -247,17 +248,28 @@ function Dashboard({ path, onNavigate }: {
       <header className="admin-page-header">
         <div>
           <h1>Admin home</h1>
-          <p>Manage your storefront settings and catalog structure.</p>
+          <p>See how your store is doing and manage your storefront.</p>
         </div>
       </header>
-      <div className="admin-dashboard-grid">
-        {navigation.filter((item) => item.path !== '/admin').map((item) => (
-          <AdminLink key={item.path} path={item.path} currentPath={path} onNavigate={onNavigate} className="admin-dashboard-link">
-            <strong>{item.label}</strong>
-            <span>{item.soon ? 'Coming soon' : 'Manage'}</span>
-          </AdminLink>
-        ))}
-      </div>
+      <Suspense fallback={<LoadingState label="Loading your store overview…" />}>
+        <OverviewPage />
+      </Suspense>
+      <section aria-labelledby="admin-management-title">
+        <div className="admin-card-heading">
+          <div>
+            <h2 id="admin-management-title">Manage your store</h2>
+            <p>Choose an area to update.</p>
+          </div>
+        </div>
+        <div className="admin-dashboard-grid">
+          {navigation.filter((item) => item.path !== '/admin').map((item) => (
+            <AdminLink key={item.path} path={item.path} currentPath={path} onNavigate={onNavigate} className="admin-dashboard-link">
+              <strong>{item.label}</strong>
+              <span>{item.soon ? 'Coming soon' : 'Manage'}</span>
+            </AdminLink>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
