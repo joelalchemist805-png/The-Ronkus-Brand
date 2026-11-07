@@ -36,6 +36,10 @@ export type ProductFormValues = {
 
 export type ProductFieldErrors = Partial<Record<keyof ProductFormValues, string>>;
 
+export function isInactivityExpired(lastActivity: number, now: number, limitMs: number): boolean {
+  return now >= lastActivity && now - lastActivity >= limitMs;
+}
+
 export type PromoBannerFormValues = {
   mode: 'flyer' | 'message';
   title: string;

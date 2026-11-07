@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { Toaster, toast } from 'sonner';
 import { AdminAuthProvider, useAdminAuth } from './admin-auth';
+import { adminSupabaseConfigured } from './admin-supabase';
 import { AdminButton, AdminCard, AdminInput, LoadingState } from './admin-components';
 import './admin.css';
 
@@ -12,6 +13,7 @@ const CouponsPage = lazy(() => import('./coupon-pages').then((module) => ({ defa
 const SettingsPage = lazy(() => import('./coupon-pages').then((module) => ({ default: module.SettingsPage })));
 const FeaturedPage = lazy(() => import('./featured-page').then((module) => ({ default: module.FeaturedPage })));
 const PromotionsPage = lazy(() => import('./promotions-page').then((module) => ({ default: module.PromotionsPage })));
+const OrdersPage = lazy(() => import('./orders-page').then((module) => ({ default: module.OrdersPage })));
 
 const navigation = [
   { path: '/admin', label: 'Home', soon: false },
@@ -21,7 +23,7 @@ const navigation = [
   { path: '/admin/settings', label: 'Settings', soon: false },
   { path: '/admin/products', label: 'Products', soon: false },
   { path: '/admin/featured', label: 'Featured', soon: false },
-  { path: '/admin/orders', label: 'Orders', soon: true },
+  { path: '/admin/orders', label: 'Orders', soon: false },
   { path: '/admin/promotions', label: 'Promotions', soon: false },
 ] as const;
 
@@ -277,6 +279,22 @@ function ComingSoonPage({ title }: { title: string }) {
   );
 }
 
+function PageNotFound({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="admin-page">
+      <header className="admin-page-header">
+        <div>
+          <h1>Page not found</h1>
+          <p>The admin page you requested does not exist.</p>
+        </div>
+      </header>
+      <AdminCard>
+        <AdminButton type="button" onClick={onBack}>Back to admin</AdminButton>
+      </AdminCard>
+    </div>
+  );
+}
+
 function getComingSoonTitle(path: string): string | null {
   const item = navigation.find((entry) => entry.path === path && entry.soon);
   return item?.label ?? null;
@@ -287,6 +305,7 @@ function AdminShell() {
   const { signOut, checking } = useAdminAuth();
   const pageTitle = getComingSoonTitle(path);
   const productEditMatch = /^\/admin\/products\/([^/]+)$/.exec(path);
+  const orderDetailMatch = /^\/admin\/orders\/([^/]+)$/.exec(path);
 
   if (checking) {
     return <main className="admin-loading-screen"><LoadingState label="Checking your administrator access…" /></main>;
@@ -306,6 +325,11 @@ function AdminShell() {
               ? <FeaturedPage />
               : path === '/admin/promotions'
                 ? <PromotionsPage />
+                : path === '/admin/orders' || orderDetailMatch
+                  ? <OrdersPage
+                      orderId={orderDetailMatch ? decodeURIComponent(orderDetailMatch[1]) : undefined}
+                      onNavigate={navigate}
+                    />
             : path === '/admin/products'
               ? <ProductsPage onNavigate={navigate} />
               : path === '/admin/products/new'
@@ -314,7 +338,7 @@ function AdminShell() {
                   ? <ProductFormPage id={productEditMatch[1]} onNavigate={navigate} onNavigateTo={navigateTo} onDirtyChange={setDirty} />
             : pageTitle
               ? <ComingSoonPage title={pageTitle} />
-              : <ComingSoonPage title="Admin page" />;
+              : <PageNotFound onBack={() => navigateTo('/admin')} />;
 
   return (
     <div className="admin-root">
@@ -381,6 +405,17 @@ export default function AdminApp() {
       }
     };
   }, []);
+
+  if (!adminSupabaseConfigured) {
+    return (
+      <main className="admin-loading-screen">
+        <section className="admin-card" role="alert">
+          <h1>Admin is unavailable</h1>
+          <p>The site is missing its Supabase configuration.</p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <AdminAuthProvider>

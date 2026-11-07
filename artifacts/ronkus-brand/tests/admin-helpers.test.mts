@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildProductImageStoragePath,
   formatNaira,
+  isInactivityExpired,
   normalizeWhatsAppNumber,
   parseNaira,
   parseWholeNumber,
@@ -16,6 +17,22 @@ import {
   type CouponFormValues,
   type ProductFormValues,
 } from '../src/admin/helpers.ts';
+
+test('inactivity expires exactly at the limit', () => {
+  assert.equal(isInactivityExpired(1_000, 31_000, 30_000), true);
+});
+
+test('inactivity does not expire just under the limit', () => {
+  assert.equal(isInactivityExpired(1_000, 30_999, 30_000), false);
+});
+
+test('inactivity expires just over the limit', () => {
+  assert.equal(isInactivityExpired(1_000, 31_001, 30_000), true);
+});
+
+test('a clock moving backwards does not expire inactivity', () => {
+  assert.equal(isInactivityExpired(31_000, 30_999, 30_000), false);
+});
 
 function couponValues(overrides: Partial<CouponFormValues> = {}): CouponFormValues {
   return {

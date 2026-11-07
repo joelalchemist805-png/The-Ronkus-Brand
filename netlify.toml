@@ -9,3 +9,13 @@ NODE_VERSION = "22"
 from = "/*"
 to = "/index.html"
 status = 200
+
+[[headers]]
+  for = "/admin"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+
+[[headers]]
+  for = "/admin/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"

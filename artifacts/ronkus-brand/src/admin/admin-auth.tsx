@@ -8,6 +8,7 @@ import {
 } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { adminSupabase } from './admin-supabase';
+import { isInactivityExpired } from './helpers';
 
 type SignInResult = 'success' | 'credentials' | 'not-admin' | 'error';
 
@@ -38,13 +39,13 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     let active = true;
     let verification = 0;
 
-    const verifySession = async (session: Session) => {
+    const verifySession = async (session: Session, silent = false) => {
       const currentVerification = ++verification;
-      setChecking(true);
       const { data, error } = await adminSupabase.rpc('is_admin');
       if (!active || currentVerification !== verification) return;
 
       if (error) {
+        if (silent) return;
         const signOutError = await revokeSession();
         if (!active) return;
         setIsAdmin(false);
@@ -100,8 +101,9 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        if (event === 'SIGNED_IN') setChecking(true);
         queueMicrotask(() => {
-          if (active) void verifySession(session);
+          if (active) void verifySession(session, event !== 'SIGNED_IN');
         });
       }
     });
@@ -116,26 +118,37 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isAdmin) return;
 
-    let timeout: ReturnType<typeof setTimeout>;
+    const inactivityLimitMs = 30 * 60 * 1000;
+    let lastActivity = Date.now();
+    let signOutStarted = false;
     const endForInactivity = async () => {
       const signOutError = await revokeSession();
       setIsAdmin(false);
       setChecking(false);
       setMessage(signOutError ?? 'You were signed out after 30 minutes of inactivity.');
     };
-    const resetTimer = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => void endForInactivity(), 30 * 60 * 1000);
+    const checkInactivity = () => {
+      if (!isInactivityExpired(lastActivity, Date.now(), inactivityLimitMs)) return false;
+      if (!signOutStarted) {
+        signOutStarted = true;
+        void endForInactivity();
+      }
+      return true;
+    };
+    const recordActivity = () => {
+      if (!checkInactivity()) lastActivity = Date.now();
     };
     const activityEvents = ['pointerdown', 'keydown', 'touchstart', 'scroll'] as const;
-    activityEvents.forEach((event) => window.addEventListener(event, resetTimer, { passive: true }));
-    document.addEventListener('visibilitychange', resetTimer);
-    resetTimer();
+    activityEvents.forEach((event) => window.addEventListener(event, recordActivity, { passive: true }));
+    document.addEventListener('visibilitychange', checkInactivity);
+    window.addEventListener('focus', checkInactivity);
+    const interval = window.setInterval(checkInactivity, 30_000);
 
     return () => {
-      clearTimeout(timeout);
-      activityEvents.forEach((event) => window.removeEventListener(event, resetTimer));
-      document.removeEventListener('visibilitychange', resetTimer);
+      window.clearInterval(interval);
+      activityEvents.forEach((event) => window.removeEventListener(event, recordActivity));
+      document.removeEventListener('visibilitychange', checkInactivity);
+      window.removeEventListener('focus', checkInactivity);
     };
   }, [isAdmin]);
 
@@ -178,7 +191,6 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       return 'success';
     },
     signOut: async () => {
-      setChecking(true);
       const signOutError = await revokeSession();
       setIsAdmin(false);
       setChecking(false);
