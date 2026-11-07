@@ -3,12 +3,13 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { adminSupabase } from './admin-supabase';
-import { isInactivityExpired } from './helpers';
+import { isInactivityExpired, shouldBlockForSignedIn } from './helpers';
 
 type SignInResult = 'success' | 'credentials' | 'not-admin' | 'error';
 
@@ -34,6 +35,14 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [checking, setChecking] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const isAdminRef = useRef(false);
+  const verifiedAdminUserId = useRef<string | null>(null);
+
+  const setAdminAccess = (userId: string | null) => {
+    isAdminRef.current = userId !== null;
+    verifiedAdminUserId.current = userId;
+    setIsAdmin(userId !== null);
+  };
 
   useEffect(() => {
     let active = true;
@@ -48,7 +57,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
         if (silent) return;
         const signOutError = await revokeSession();
         if (!active) return;
-        setIsAdmin(false);
+        setAdminAccess(null);
         setChecking(false);
         setInitialized(true);
         setMessage(signOutError ?? 'Could not verify admin access. Please sign in again.');
@@ -58,7 +67,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       if (data !== true) {
         const signOutError = await revokeSession();
         if (!active) return;
-        setIsAdmin(false);
+        setAdminAccess(null);
         setChecking(false);
         setInitialized(true);
         setMessage(signOutError
@@ -68,7 +77,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (session.user.id) {
-        setIsAdmin(true);
+        setAdminAccess(session.user.id);
         setChecking(false);
         setInitialized(true);
         setMessage(null);
@@ -86,7 +95,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       if (data.session) {
         void verifySession(data.session);
       } else {
-        setIsAdmin(false);
+        setAdminAccess(null);
         setChecking(false);
         setInitialized(true);
       }
@@ -95,15 +104,21 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     const { data: authListener } = adminSupabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT' || !session) {
         verification += 1;
-        setIsAdmin(false);
+        setAdminAccess(null);
         setChecking(false);
         setInitialized(true);
         return;
       }
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-        if (event === 'SIGNED_IN') setChecking(true);
+        const shouldBlock = event === 'SIGNED_IN'
+          && shouldBlockForSignedIn(
+            verifiedAdminUserId.current,
+            session.user.id,
+            isAdminRef.current,
+          );
+        if (shouldBlock) setChecking(true);
         queueMicrotask(() => {
-          if (active) void verifySession(session, event !== 'SIGNED_IN');
+          if (active) void verifySession(session, event !== 'SIGNED_IN' || !shouldBlock);
         });
       }
     });
@@ -123,7 +138,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     let signOutStarted = false;
     const endForInactivity = async () => {
       const signOutError = await revokeSession();
-      setIsAdmin(false);
+      setAdminAccess(null);
       setChecking(false);
       setMessage(signOutError ?? 'You were signed out after 30 minutes of inactivity.');
     };
@@ -163,7 +178,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       setMessage(null);
       const { data, error } = await adminSupabase.auth.signInWithPassword({ email, password });
       if (error || !data.session) {
-        setIsAdmin(false);
+        setAdminAccess(null);
         setChecking(false);
         return 'credentials';
       }
@@ -171,7 +186,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       const { data: adminResult, error: adminError } = await adminSupabase.rpc('is_admin');
       if (adminError || adminResult !== true) {
         const signOutError = await revokeSession();
-        setIsAdmin(false);
+        setAdminAccess(null);
         setChecking(false);
         setMessage(
           adminError
@@ -185,14 +200,14 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
         return adminError ? 'error' : 'not-admin';
       }
 
-      setIsAdmin(true);
+      setAdminAccess(data.session.user.id);
       setChecking(false);
       setMessage(null);
       return 'success';
     },
     signOut: async () => {
       const signOutError = await revokeSession();
-      setIsAdmin(false);
+      setAdminAccess(null);
       setChecking(false);
       setMessage(signOutError);
     },

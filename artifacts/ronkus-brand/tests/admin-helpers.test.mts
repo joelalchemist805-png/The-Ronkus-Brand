@@ -11,6 +11,7 @@ import {
   parseNaira,
   parseWholeNumber,
   safeProductImageFilename,
+  shouldBlockForSignedIn,
   slugify,
   toLagosIso,
   validateCouponForm,
@@ -35,6 +36,22 @@ test('inactivity expires just over the limit', () => {
 
 test('a clock moving backwards does not expire inactivity', () => {
   assert.equal(isInactivityExpired(31_000, 30_999, 30_000), false);
+});
+
+test('a verified administrator returning to the same user does not block', () => {
+  assert.equal(shouldBlockForSignedIn('admin-user', 'admin-user', true), false);
+});
+
+test('a different signed-in user blocks for verification', () => {
+  assert.equal(shouldBlockForSignedIn('admin-user', 'other-user', true), true);
+});
+
+test('a user without a prior verified admin blocks for verification', () => {
+  assert.equal(shouldBlockForSignedIn(null, 'admin-user', true), true);
+});
+
+test('a user who is no longer an administrator blocks for verification', () => {
+  assert.equal(shouldBlockForSignedIn('admin-user', 'admin-user', false), true);
 });
 
 function couponValues(overrides: Partial<CouponFormValues> = {}): CouponFormValues {

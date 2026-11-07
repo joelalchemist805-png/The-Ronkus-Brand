@@ -40,6 +40,14 @@ export function isInactivityExpired(lastActivity: number, now: number, limitMs: 
   return now >= lastActivity && now - lastActivity >= limitMs;
 }
 
+export function shouldBlockForSignedIn(
+  verifiedUserId: string | null,
+  sessionUserId: string,
+  isAdmin: boolean,
+): boolean {
+  return !isAdmin || verifiedUserId !== sessionUserId;
+}
+
 export type PromoBannerFormValues = {
   mode: 'flyer' | 'message';
   title: string;
