@@ -90,9 +90,9 @@ test('tab predicates and abandoned labels distinguish unpaid from paid orders', 
   const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
   const oneMillisecondBefore = new Date(now.getTime() - 60 * 60 * 1000 + 1).toISOString();
   assert.equal(isOrderAbandoned(oneHourAgo, now), true);
-  assert.equal(getAwaitingPaymentLabel(oneHourAgo, now), 'Abandoned');
+  assert.equal(getAwaitingPaymentLabel(oneHourAgo, now), 'Not paid');
   assert.equal(isOrderAbandoned(oneMillisecondBefore, now), false);
-  assert.equal(getAwaitingPaymentLabel(oneMillisecondBefore, now), 'Awaiting payment');
+  assert.equal(getAwaitingPaymentLabel(oneMillisecondBefore, now), 'Waiting for payment');
   assert.equal(isOrderAbandoned('not a date', now), false);
 });
 

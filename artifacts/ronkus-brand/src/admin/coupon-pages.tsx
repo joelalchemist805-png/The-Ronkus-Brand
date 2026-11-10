@@ -26,6 +26,7 @@ import {
 import {
   formatNaira,
   formatLagosDateTime,
+  formatReadableLagosDateTime,
   normalizeWhatsAppNumber,
   parseNaira,
   parseWholeNumber,
@@ -84,7 +85,7 @@ function CouponForm({ initial, onSave, onCancel }: {
       && values.max_redemptions.trim()
       && (parseWholeNumber(values.max_redemptions) ?? 0) < initial.redemption_count
     ) {
-      validationErrors.max_redemptions = 'The limit cannot be lower than the current redemption count.';
+      validationErrors.max_redemptions = 'The limit cannot be lower than times already used.';
     }
     setErrors(validationErrors);
     if (Object.keys(validationErrors).length > 0) return;
@@ -132,7 +133,7 @@ function CouponForm({ initial, onSave, onCancel }: {
 
   return (
     <form className="admin-form" onSubmit={(event) => void submit(event)} noValidate>
-      <div className="admin-form-grid admin-form-grid-wide">
+      <div className="admin-form-grid admin-form-grid-wide admin-coupon-form-grid">
         <div className="admin-code-field">
           <AdminInput
             id={`coupon-code-${initial?.id ?? 'new'}`}
@@ -149,7 +150,7 @@ function CouponForm({ initial, onSave, onCancel }: {
         </div>
         <AdminSelect
           id={`coupon-type-${initial?.id ?? 'new'}`}
-          label="Discount type"
+          label="Type of discount"
           value={values.discount_type}
           onChange={(value) => {
             const type = value === 'fixed' ? 'fixed' : 'percent';
@@ -161,13 +162,13 @@ function CouponForm({ initial, onSave, onCancel }: {
             setErrors((current) => ({ ...current, discount_type: undefined, max_discount_ngn: undefined }));
           }}
           options={[
-            { value: 'percent', label: 'Percentage' },
-            { value: 'fixed', label: 'Fixed amount' },
+            { value: 'percent', label: 'Percentage (%)' },
+            { value: 'fixed', label: 'Fixed amount (₦)' },
           ]}
         />
         <AdminNumberInput
           id={`coupon-value-${initial?.id ?? 'new'}`}
-          label={values.discount_type === 'percent' ? 'Value (1–100%)' : 'Value (naira)'}
+          label="Discount amount"
           value={values.value}
           onChange={(value) => change('value', value)}
           min={1}
@@ -177,48 +178,49 @@ function CouponForm({ initial, onSave, onCancel }: {
         />
         <AdminTextarea
           id={`coupon-description-${initial?.id ?? 'new'}`}
-          label="Description"
+          label="Description (optional)"
           value={values.description}
           onChange={(value) => change('description', value)}
           rows={2}
         />
         <AdminNairaInput
           id={`coupon-minimum-${initial?.id ?? 'new'}`}
-          label="Minimum subtotal"
+          label="Minimum order amount"
           value={values.min_subtotal_ngn}
           onChange={(value) => change('min_subtotal_ngn', value)}
           error={errors.min_subtotal_ngn}
-          hint="Leave blank or enter 0 for no minimum."
+          hint="Enter 0 for no minimum."
         />
         {values.discount_type === 'percent' && (
           <AdminNairaInput
             id={`coupon-maximum-${initial?.id ?? 'new'}`}
-            label="Maximum discount"
+            label="Biggest discount (₦)"
             value={values.max_discount_ngn}
             onChange={(value) => change('max_discount_ngn', value)}
             error={errors.max_discount_ngn}
-            hint="Optional cap for percentage discounts."
           />
         )}
         <AdminInput
           id={`coupon-starts-${initial?.id ?? 'new'}`}
-          label="Starts (Africa/Lagos)"
+          label="Starts at"
           type="datetime-local"
           value={values.starts_at}
           onChange={(value) => change('starts_at', value)}
           error={errors.starts_at}
+          hint={formatReadableLagosDateTime(toLagosIso(values.starts_at), 'Starts')}
         />
         <AdminInput
           id={`coupon-expires-${initial?.id ?? 'new'}`}
-          label="Expires (Africa/Lagos)"
+          label="Ends at"
           type="datetime-local"
           value={values.expires_at}
           onChange={(value) => change('expires_at', value)}
           error={errors.expires_at}
+          hint={formatReadableLagosDateTime(toLagosIso(values.expires_at), 'Ends')}
         />
         <AdminNumberInput
           id={`coupon-redemptions-${initial?.id ?? 'new'}`}
-          label="Maximum redemptions"
+          label="Times it can be used"
           value={values.max_redemptions}
           onChange={(value) => change('max_redemptions', value)}
           min={0}
@@ -227,8 +229,8 @@ function CouponForm({ initial, onSave, onCancel }: {
         />
         {initial && (
           <div className="admin-field">
-            <span className="admin-field-label">Redemptions</span>
-            <p className="admin-readonly-value">{initial.redemption_count} (read-only)</p>
+            <span className="admin-field-label">Times used</span>
+            <p className="admin-readonly-value">{initial.redemption_count}</p>
           </div>
         )}
         <AdminToggle
@@ -274,7 +276,7 @@ export function CouponsPage() {
 
   return (
     <div className="admin-page">
-      <AdminPageHeader title="Coupons" description="Create and manage discount codes and redemption limits." />
+      <AdminPageHeader title="Coupons" description="Create and manage discount codes." />
       <AdminCard>
         <h2>Create a coupon</h2>
         <CouponForm initial={null} onSave={save} />
@@ -286,15 +288,15 @@ export function CouponsPage() {
           <div className="admin-card-heading">
             <div>
               <h2>{coupon.code}</h2>
-              <p>{coupon.discount_type === 'percent' ? `${coupon.value}% off` : `${formatNaira(coupon.value)} off`} · {coupon.redemption_count} redemption(s)</p>
+              <p>{coupon.discount_type === 'percent' ? `${coupon.value}% off` : `${formatNaira(coupon.value)} off`} · Used {coupon.redemption_count} times</p>
             </div>
             <span className={`admin-status ${coupon.is_active ? 'is-active' : ''}`}>{coupon.is_active ? 'Active' : 'Inactive'}</span>
           </div>
           <dl className="admin-detail-grid">
-            <div><dt>Starts</dt><dd>{formatLagosDateTime(coupon.starts_at)}</dd></div>
-            <div><dt>Expires</dt><dd>{formatLagosDateTime(coupon.expires_at)}</dd></div>
-            <div><dt>Minimum</dt><dd>{formatNaira(coupon.min_subtotal_ngn)}</dd></div>
-            <div><dt>Redemption limit</dt><dd>{coupon.max_redemptions ?? 'Unlimited'}</dd></div>
+            <div><dt>Starts at</dt><dd>{formatLagosDateTime(coupon.starts_at)}</dd></div>
+            <div><dt>Ends at</dt><dd>{formatLagosDateTime(coupon.expires_at)}</dd></div>
+            <div><dt>Minimum order</dt><dd>{formatNaira(coupon.min_subtotal_ngn)}</dd></div>
+            <div><dt>Use limit</dt><dd>{coupon.max_redemptions ?? 'No limit'}</dd></div>
           </dl>
           {editingId === coupon.id ? (
             <CouponForm initial={coupon} onSave={save} onCancel={() => setEditingId(null)} />
@@ -302,11 +304,11 @@ export function CouponsPage() {
             <div className="admin-form-actions">
               <AdminButton type="button" variant="secondary" onClick={() => setEditingId(coupon.id)}>Edit</AdminButton>
               {coupon.redemption_count > 0 ? (
-                <span className="admin-inline-note">Coupons with redemptions can be deactivated, not deleted.</span>
+                <span className="admin-inline-note">Used coupons can be deactivated, not deleted.</span>
               ) : (
                 <ConfirmDialog
                   label={`Delete ${coupon.code}?`}
-                  message="This permanently deletes a coupon that has no recorded redemptions."
+                  message="This permanently deletes a coupon that has not been used."
                   confirmLabel="Delete coupon"
                   onConfirm={async () => {
                     await deleteCouponIfUnused(coupon.id);
@@ -370,17 +372,16 @@ export function SettingsPage() {
 
   return (
     <div className="admin-page">
-      <AdminPageHeader title="Settings" description="Update the public WhatsApp contact used by the storefront." />
+      <AdminPageHeader title="Settings" description="Update your WhatsApp number." />
       <AdminCard>
         <h2>WhatsApp number</h2>
-        <p className="admin-note">Enter a Nigerian local number or an international number. Common separators are accepted.</p>
         {loading ? <LoadingState label="Loading store settings…" /> : null}
         {loadError && <p className="admin-alert" role="alert">{loadError}</p>}
         {!loading && !loadError && (
           <form className="admin-form" onSubmit={(event) => void submit(event)} noValidate>
             <AdminInput
               id="whatsapp-number"
-              label="Public WhatsApp number"
+              label="WhatsApp number"
               type="tel"
               inputMode="numeric"
               autoComplete="tel"
@@ -397,8 +398,8 @@ export function SettingsPage() {
             <div className="admin-form-actions">
               <AdminButton type="submit" disabled={saving || loading}>{saving ? 'Saving…' : 'Save number'}</AdminButton>
               {previewHref
-                ? <a className="admin-button admin-button-secondary" href={previewHref} target="_blank" rel="noreferrer">Preview wa.me link</a>
-                : <span className="admin-inline-note">Enter a valid number to preview the wa.me link.</span>}
+                ? <a className="admin-button admin-button-secondary" href={previewHref} target="_blank" rel="noreferrer">Test WhatsApp link</a>
+                : null}
             </div>
           </form>
         )}

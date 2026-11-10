@@ -1,8 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { Menu, X } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { AdminAuthProvider, useAdminAuth } from './admin-auth';
 import { adminSupabaseConfigured } from './admin-supabase';
 import { AdminButton, AdminCard, AdminInput, LoadingState } from './admin-components';
+import { keepMobileMenuOpenAfterNavigation } from './helpers';
 import './admin.css';
 
 const CategoriesPage = lazy(() => import('./catalog-pages').then((module) => ({ default: module.CategoriesPage })));
@@ -17,15 +19,15 @@ const OrdersPage = lazy(() => import('./orders-page').then((module) => ({ defaul
 const OverviewPage = lazy(() => import('./overview-page'));
 
 const navigation = [
-  { path: '/admin', label: 'Home', soon: false },
-  { path: '/admin/categories', label: 'Categories', soon: false },
-  { path: '/admin/delivery', label: 'Delivery', soon: false },
-  { path: '/admin/coupons', label: 'Coupons', soon: false },
-  { path: '/admin/settings', label: 'Settings', soon: false },
-  { path: '/admin/products', label: 'Products', soon: false },
-  { path: '/admin/featured', label: 'Featured', soon: false },
-  { path: '/admin/orders', label: 'Orders', soon: false },
-  { path: '/admin/promotions', label: 'Promotions', soon: false },
+  { path: '/admin', label: 'Home', shortcut: 'See your shop overview', soon: false },
+  { path: '/admin/categories', label: 'Categories', shortcut: 'Edit product categories', soon: false },
+  { path: '/admin/delivery', label: 'Delivery', shortcut: 'Set delivery areas and fees', soon: false },
+  { path: '/admin/coupons', label: 'Coupons', shortcut: 'Create discount codes', soon: false },
+  { path: '/admin/settings', label: 'Settings', shortcut: 'Update your WhatsApp number', soon: false },
+  { path: '/admin/products', label: 'Products', shortcut: 'Add and edit products', soon: false },
+  { path: '/admin/featured', label: 'Featured', shortcut: 'Choose homepage products', soon: false },
+  { path: '/admin/orders', label: 'Orders', shortcut: 'View and update orders', soon: false },
+  { path: '/admin/promotions', label: 'Promotions', shortcut: 'Add website banners', soon: false },
 ] as const;
 
 const failedAttemptsStorageKey = 'ronkus-admin-failed-attempts';
@@ -42,13 +44,16 @@ function useAdminPath() {
   const setDirty = useCallback((dirty: boolean) => {
     dirtyRef.current = dirty;
   }, []);
-  const navigateTo = useCallback((pathname: string) => {
-    const nextPath = normalizeAdminPath(pathname);
-    if (nextPath === pathRef.current) return;
-    if (dirtyRef.current && !window.confirm('You have unsaved changes. Leave this page and discard them?')) return;
-    window.history.pushState(null, '', nextPath);
+  const navigateTo = useCallback((pathname: string): boolean => {
+    const target = new URL(pathname, window.location.origin);
+    const nextPath = normalizeAdminPath(target.pathname);
+    const nextUrl = `${nextPath}${target.search}${target.hash}`;
+    if (nextPath === pathRef.current && target.search === window.location.search && target.hash === window.location.hash) return true;
+    if (dirtyRef.current && !window.confirm('You have unsaved changes. Leave this page and discard them?')) return false;
+    window.history.pushState(null, '', nextUrl);
     pathRef.current = nextPath;
     setPath(nextPath);
+    return true;
   }, []);
 
   useEffect(() => {
@@ -89,7 +94,7 @@ function useAdminPath() {
     };
   }, []);
 
-  const navigate = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+  const navigate = (event: ReactMouseEvent<HTMLAnchorElement>): boolean => {
     if (
       event.defaultPrevented
       || event.button !== 0
@@ -97,11 +102,11 @@ function useAdminPath() {
       || event.ctrlKey
       || event.shiftKey
       || event.altKey
-    ) return;
+    ) return false;
     const anchor = event.currentTarget;
-    if (anchor.origin !== window.location.origin) return;
+    if (anchor.origin !== window.location.origin) return false;
     event.preventDefault();
-    navigateTo(anchor.pathname);
+    return navigateTo(anchor.pathname);
   };
 
   return { path, navigate, navigateTo, setDirty };
@@ -247,8 +252,7 @@ function Dashboard({ path, onNavigate }: {
     <div className="admin-page">
       <header className="admin-page-header">
         <div>
-          <h1>Admin home</h1>
-          <p>See how your store is doing and manage your storefront.</p>
+          <h1>Welcome back.</h1>
         </div>
       </header>
       <Suspense fallback={<LoadingState label="Loading your store overview…" />}>
@@ -257,15 +261,14 @@ function Dashboard({ path, onNavigate }: {
       <section aria-labelledby="admin-management-title">
         <div className="admin-card-heading">
           <div>
-            <h2 id="admin-management-title">Manage your store</h2>
-            <p>Choose an area to update.</p>
+            <h2 id="admin-management-title">Shortcuts</h2>
           </div>
         </div>
         <div className="admin-dashboard-grid">
           {navigation.filter((item) => item.path !== '/admin').map((item) => (
             <AdminLink key={item.path} path={item.path} currentPath={path} onNavigate={onNavigate} className="admin-dashboard-link">
               <strong>{item.label}</strong>
-              <span>{item.soon ? 'Coming soon' : 'Manage'}</span>
+              <span>{item.shortcut}</span>
             </AdminLink>
           ))}
         </div>
@@ -315,9 +318,70 @@ function getComingSoonTitle(path: string): string | null {
 function AdminShell() {
   const { path, navigate, navigateTo, setDirty } = useAdminPath();
   const { signOut, checking } = useAdminAuth();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 759px)').matches);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const pageTitle = getComingSoonTitle(path);
   const productEditMatch = /^\/admin\/products\/([^/]+)$/.exec(path);
   const orderDetailMatch = /^\/admin\/orders\/([^/]+)$/.exec(path);
+
+  const navigateFromMenu = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    const navigationSucceeded = navigate(event);
+    setMobileMenuOpen((isOpen) => keepMobileMenuOpenAfterNavigation(isOpen, navigationSucceeded));
+  };
+  const closeMenu = () => setMobileMenuOpen(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 759px)');
+    const updateViewport = () => {
+      setIsMobile(mediaQuery.matches);
+      if (!mediaQuery.matches) setMobileMenuOpen(false);
+    };
+    mediaQuery.addEventListener('change', updateViewport);
+    return () => mediaQuery.removeEventListener('change', updateViewport);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousDocumentOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    const firstLink = sidebarRef.current?.querySelector<HTMLElement>('a[href]');
+    firstLink?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMobileMenuOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const panel = sidebarRef.current;
+      if (!panel) return;
+      const focusable = panel.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) {
+        event.preventDefault();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousDocumentOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+      if (window.matchMedia('(max-width: 759px)').matches) menuButtonRef.current?.focus();
+    };
+  }, [mobileMenuOpen]);
 
   if (checking) {
     return <main className="admin-loading-screen"><LoadingState label="Checking your administrator access…" /></main>;
@@ -355,10 +419,23 @@ function AdminShell() {
   return (
     <div className="admin-root">
       <header className="admin-topbar">
-        <a className="admin-brand" href="/admin" onClick={navigate}>
-          <span className="admin-brand-mark" aria-hidden="true">R</span>
-          <span>The Ronkus Brand <small>Admin</small></span>
-        </a>
+        <div className="admin-topbar-left">
+          <button
+            ref={menuButtonRef}
+            className="admin-menu-button"
+            type="button"
+            aria-expanded={mobileMenuOpen}
+            aria-controls="admin-sidebar-panel"
+            onClick={() => setMobileMenuOpen((open) => !open)}
+          >
+            <Menu size={18} aria-hidden="true" />
+            <span>Menu</span>
+          </button>
+          <a className="admin-brand" href="/admin" onClick={navigate}>
+            <span className="admin-brand-mark" aria-hidden="true">R</span>
+            <span>The Ronkus Brand <small>Admin</small></span>
+          </a>
+        </div>
         <AdminButton
           type="button"
           variant="secondary"
@@ -372,10 +449,25 @@ function AdminShell() {
         </AdminButton>
       </header>
       <div className="admin-shell">
-        <aside className="admin-sidebar" aria-label="Admin sidebar">
+        {isMobile && mobileMenuOpen && (
+          <div className="admin-sidebar-backdrop" onClick={closeMenu} aria-hidden="true" />
+        )}
+        <aside
+          ref={sidebarRef}
+          id="admin-sidebar-panel"
+          className={`admin-sidebar ${mobileMenuOpen ? 'is-open' : ''}`}
+          aria-label="Admin menu"
+          role={mobileMenuOpen ? 'dialog' : undefined}
+          aria-modal={mobileMenuOpen ? true : undefined}
+          tabIndex={-1}
+        >
+          <AdminButton className="admin-menu-close" type="button" variant="quiet" onClick={closeMenu}>
+            <X size={18} aria-hidden="true" />
+            <span>Close menu</span>
+          </AdminButton>
           <nav aria-label="Admin navigation">
             {navigation.map((item) => (
-              <AdminLink key={item.path} path={item.path} currentPath={path} onNavigate={navigate}>
+              <AdminLink key={item.path} path={item.path} currentPath={path} onNavigate={isMobile ? navigateFromMenu : navigate}>
                 <span>{item.label}</span>
                 {item.soon && <small>Coming soon</small>}
               </AdminLink>

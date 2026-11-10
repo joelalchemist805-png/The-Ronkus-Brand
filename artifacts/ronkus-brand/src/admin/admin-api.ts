@@ -1,7 +1,15 @@
 import type { Database } from '@/lib/db-types';
 import type { Json } from '@/lib/db-types';
 import { adminSupabase } from './admin-supabase';
-import { buildProductImageStoragePath, buildPromoFlyerStoragePath } from './helpers';
+import {
+  buildCategoryImageStoragePath,
+  buildCategoryImagePublicUrl,
+  buildProductImageStoragePath,
+  buildPromoFlyerStoragePath,
+  categoryImageStoragePathToDelete,
+  slugify,
+  uniqueSlugFromName,
+} from './helpers';
 
 export type Category = Database['public']['Tables']['categories']['Row'];
 export type Subcategory = Database['public']['Tables']['subcategories']['Row'];
@@ -60,6 +68,11 @@ export type CustomOrderWrite = Pick<
   | 'needed_by_mode'
   | 'custom_request_fields'
 >;
+export type ProductCreateWrite = ProductWrite & ProductConfiguration & Pick<
+  Product,
+  'is_featured' | 'featured_position'
+>;
+export type ProductUpdateWrite = Omit<ProductWrite, 'slug'> & ProductConfiguration;
 
 export type ProductListItem = Pick<
   Product,
@@ -124,7 +137,7 @@ function friendlyProductError(error: AdminError): string {
 
 function throwOnProductSlugError(error: AdminError | null): void {
   if (error?.code === '23505') {
-    throw new Error('That web address is already used by another product.');
+    throw new Error('That product link is already in use.');
   }
   throwOnProductError(error);
 }
@@ -204,6 +217,13 @@ export async function setFeaturedProduct(
   id: string,
   values: Pick<Product, 'is_featured' | 'featured_position'>,
 ): Promise<void> {
+  await updateProductFeaturedFields(id, values);
+}
+
+async function updateProductFeaturedFields(
+  id: string,
+  values: Partial<Pick<Product, 'is_active' | 'is_featured' | 'featured_position'>>,
+): Promise<void> {
   const { data, error } = await adminSupabase
     .from('products')
     .update(values)
@@ -242,7 +262,7 @@ export async function listPromoBanners(): Promise<PromoBanner[]> {
 export async function getActivePromoBannerNow(): Promise<Database['public']['Functions']['get_active_promo_banner']['Returns'][number] | null> {
   const { data, error } = await adminSupabase.rpc('get_active_promo_banner');
   throwOnPromoError(error);
-  if (!data) throw new Error('The current storefront banner could not be loaded.');
+  if (!data) throw new Error('The current website banner could not be loaded.');
   return data[0] ?? null;
 }
 
@@ -416,18 +436,30 @@ export async function getProduct(id: string): Promise<ProductWrite | null> {
   return data;
 }
 
-export async function createProduct(values: ProductWrite): Promise<string> {
-  const { data, error } = await adminSupabase
-    .from('products')
-    .insert(values)
-    .select('id')
-    .single();
-  throwOnProductSlugError(error);
-  if (!data) throw new Error('The product could not be created.');
-  return data.id;
+export async function createProduct(values: ProductCreateWrite): Promise<string> {
+  const baseSlug = slugify(values.name) || 'product';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { data: existing, error: lookupError } = await adminSupabase
+      .from('products')
+      .select('slug')
+      .like('slug', `${baseSlug}%`);
+    throwOnProductError(lookupError);
+    if (!existing) throw new Error('Product names could not be checked.');
+    const slug = uniqueSlugFromName(values.name, existing.map((product) => product.slug));
+    const { data, error } = await adminSupabase
+      .from('products')
+      .insert({ ...values, slug })
+      .select('id')
+      .single();
+    if (error?.code === '23505') continue;
+    throwOnProductSlugError(error);
+    if (!data) throw new Error('The product could not be created.');
+    return data.id;
+  }
+  throw new Error('A product with a similar name was just added. Please try again.');
 }
 
-export async function updateProduct(id: string, values: ProductWrite): Promise<void> {
+export async function updateProduct(id: string, values: ProductUpdateWrite): Promise<void> {
   const { data, error } = await adminSupabase
     .from('products')
     .update(values)
@@ -507,6 +539,17 @@ export async function setProductActive(id: string, isActive: boolean): Promise<v
   if (!data) throw new Error('Product not found.');
 }
 
+export async function publishProductWithFeaturedPosition(
+  id: string,
+  featuredPosition: number | null,
+): Promise<void> {
+  await updateProductFeaturedFields(id, {
+    is_active: true,
+    is_featured: featuredPosition !== null,
+    featured_position: featuredPosition,
+  });
+}
+
 export async function productHasOrders(id: string): Promise<boolean> {
   const { count, error } = await adminSupabase
     .from('order_items')
@@ -518,7 +561,7 @@ export async function productHasOrders(id: string): Promise<boolean> {
 
 export async function deleteProduct(id: string): Promise<void> {
   if (await productHasOrders(id)) {
-    throw new Error('This product appears in order history. Hide it from the storefront instead.');
+    throw new Error('This product has orders. Hide it from your website instead.');
   }
   const images = await listProductImages(id);
   const { data, error } = await adminSupabase
@@ -570,6 +613,7 @@ export async function uploadProductImage(
       .upload(path, file, { contentType: file.type, upsert: false });
     if (uploadError) throw new Error('The photo could not be uploaded. Please try again.');
   } catch {
+    await removeProductStorageFiles([path]);
     throw new Error('The photo could not be uploaded. Please try again.');
   }
 
@@ -599,6 +643,38 @@ export async function uploadProductImage(
   if (error) {
     await removeProductStorageFiles([path]);
     throwOnProductError(error);
+  }
+}
+
+export async function uploadCategoryImage(categoryId: string, file: File): Promise<{
+  storagePath: string;
+  publicUrl: string;
+}> {
+  const storagePath = buildCategoryImageStoragePath(categoryId, file.name);
+  const { error } = await adminSupabase.storage
+    .from('product-images')
+    .upload(storagePath, file, { contentType: file.type, upsert: false });
+  if (error) throw new Error('The category photo could not be uploaded. Please try again.');
+  try {
+    return {
+      storagePath,
+      publicUrl: buildCategoryImagePublicUrl(publicProductImageUrl(''), storagePath),
+    };
+  } catch {
+    await removeCategoryImage(storagePath);
+    throw new Error('The category photo link could not be created.');
+  }
+}
+
+export async function removeCategoryImage(imagePath: string): Promise<void> {
+  const storageOrigin = new URL(publicProductImageUrl('')).origin;
+  const storagePath = categoryImageStoragePathToDelete(imagePath, storageOrigin);
+  if (!storagePath) return;
+  try {
+    const { error } = await adminSupabase.storage.from('product-images').remove([storagePath]);
+    if (error) console.warn('Could not delete the previous category photo.');
+  } catch {
+    console.warn('Could not delete the previous category photo.');
   }
 }
 
@@ -759,10 +835,22 @@ export async function updateCategory(
 }
 
 export async function addSubcategory(
-  values: Pick<Subcategory, 'category_id' | 'slug' | 'name' | 'sort_order' | 'is_active'>,
+  values: Pick<Subcategory, 'category_id' | 'name' | 'sort_order' | 'is_active'>,
 ): Promise<void> {
-  const { error } = await adminSupabase.from('subcategories').insert(values);
-  throwOnError(error);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { data: existing, error: lookupError } = await adminSupabase
+      .from('subcategories')
+      .select('slug')
+      .eq('category_id', values.category_id);
+    throwOnError(lookupError);
+    if (!existing) throw new Error('Subcategory names could not be checked.');
+    const slug = uniqueSlugFromName(values.name, existing.map((subcategory) => subcategory.slug));
+    const { error } = await adminSupabase.from('subcategories').insert({ ...values, slug });
+    if (error?.code === '23505') continue;
+    throwOnError(error);
+    return;
+  }
+  throw new Error('A subcategory with a similar name was just added. Please try again.');
 }
 
 export async function updateSubcategory(
@@ -856,7 +944,7 @@ export async function deleteCouponIfUnused(id: string): Promise<void> {
   throwOnError(readError);
   if (!data) throw new Error('Coupon could not be loaded.');
   if (data.redemption_count > 0) {
-    throw new Error('This coupon has redemptions. Deactivate it instead.');
+    throw new Error('This coupon has been used. Deactivate it instead.');
   }
   const { error } = await adminSupabase.from('coupons').delete().eq('id', id);
   throwOnError(error);

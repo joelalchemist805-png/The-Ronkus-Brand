@@ -111,31 +111,26 @@ export function FeaturedPage() {
       />
       <AdminCard>
         <h2>Homepage display</h2>
-        <p className="admin-note">
-          The storefront query returns at most 12 active featured products, ordered by featured position
-          and then name. It currently shows {homepageProducts.length} of {activeFeatured.length} active
-          featured products. Search and category filters on the storefront can narrow the visible set.
-        </p>
+        <p className="admin-note">Up to 12 featured products show on your homepage, in this order.</p>
         {homepageProducts.length > 0 ? (
           <ol className="admin-featured-homepage-order">
             {homepageProducts.map((product) => <li key={product.id}>{product.name}</li>)}
           </ol>
         ) : (
-          <EmptyState>No active featured products will appear on the homepage.</EmptyState>
+          <EmptyState>No featured products yet.</EmptyState>
         )}
       </AdminCard>
 
       <AdminCard>
         <div className="admin-card-heading">
           <div>
-            <h2>Featured order</h2>
-            <p>Move buttons work with touch and keyboard. Changes are saved one product at a time.</p>
+            <h2>Order on your homepage</h2>
           </div>
         </div>
         {actionError && <div className="admin-alert" role="alert">{actionError}</div>}
         {loadError && <div className="admin-alert" role="alert">{loadError}</div>}
         {loading && !products ? <LoadingState label="Loading featured products…" /> : null}
-        {products?.length === 0 && <EmptyState>No products are featured yet.</EmptyState>}
+        {products?.length === 0 && <EmptyState>No featured products yet.</EmptyState>}
         {products && products.length > 0 && (
           <ol className="admin-featured-list">
             {products.map((product, index) => {
@@ -199,8 +194,7 @@ export function FeaturedPage() {
       </AdminCard>
 
       <AdminCard>
-        <h2>Add an active product</h2>
-        <p className="admin-inline-note">Only active products that are not already featured are listed.</p>
+        <h2>Add a product</h2>
         <AdminInput
           id="featured-product-search"
           label="Search active products"

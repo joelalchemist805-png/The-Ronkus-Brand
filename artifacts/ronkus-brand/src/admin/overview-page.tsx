@@ -82,7 +82,7 @@ function useDateRange() {
     <div className="admin-analytics-controls">
       <AdminSelect
         id="admin-analytics-preset"
-        label="Date range"
+        label="Show"
         value={preset}
         onChange={(value) => setPreset(value as AnalyticsDatePreset)}
         options={[
@@ -156,7 +156,6 @@ function OverviewCard({ range }: { range: { from: string; to: string } }) {
       <div className="admin-card-heading">
         <div>
           <h2>Orders and money</h2>
-          <p>All orders are counted. Money figures include paid orders that were not canceled.</p>
         </div>
       </div>
       {state.loading ? <LoadingSkeleton rows={6} /> : state.error
@@ -165,34 +164,33 @@ function OverviewCard({ range }: { range: { from: string; to: string } }) {
           <>
             <dl className="admin-analytics-metrics">
               <div><dt>Total orders</dt><dd>{state.data.total_orders.toLocaleString('en-NG')}</dd></div>
-              <div><dt>Paid orders, not canceled</dt><dd>{state.data.paid_orders.toLocaleString('en-NG')}</dd></div>
-              <div><dt>Revenue, paid and not canceled</dt><dd>{formatNaira(state.data.total_revenue_ngn)}</dd></div>
-              <div><dt>Delivery fees, paid and not canceled</dt><dd>{formatNaira(state.data.delivery_fees_ngn)}</dd></div>
-              <div><dt>Discounts, paid and not canceled</dt><dd>{formatNaira(state.data.discounts_ngn)}</dd></div>
-              <div><dt>Average order value, paid and not canceled</dt><dd>{formatNaira(state.data.average_order_value_ngn ?? 0)}</dd></div>
+              <div><dt>Paid orders</dt><dd>{state.data.paid_orders.toLocaleString('en-NG')}</dd></div>
+              <div><dt>Sales</dt><dd>{formatNaira(state.data.total_revenue_ngn)}</dd></div>
+              <div><dt>Delivery fees collected</dt><dd>{formatNaira(state.data.delivery_fees_ngn)}</dd></div>
+              <div><dt>Discounts given</dt><dd>{formatNaira(state.data.discounts_ngn)}</dd></div>
+              <div><dt>Average order</dt><dd>{formatNaira(state.data.average_order_value_ngn ?? 0)}</dd></div>
             </dl>
             <div className="admin-analytics-statuses">
               <h3>Orders by status</h3>
-              <p>All orders in this date range, including unpaid and canceled orders.</p>
               <StatusCounts counts={state.data.orders_by_status} />
             </div>
             {state.data.total_orders === 0 && (
-              <EmptyState>No orders were placed in this date range yet.</EmptyState>
+              <EmptyState>No orders yet.</EmptyState>
             )}
           </>
-        ) : <EmptyState>No order summary is available for this date range.</EmptyState>}
+        ) : <EmptyState>No orders yet.</EmptyState>}
     </AdminCard>
   );
 }
 
 function StatusCounts({ counts }: { counts: OverviewRow['orders_by_status'] }) {
   const statusLabels = [
-    ['pending', 'Pending'],
-    ['paid', 'Paid'],
+    ['pending', 'Waiting for payment'],
+    ['paid', 'Paid (new)'],
     ['preparing', 'Preparing'],
-    ['delivering', 'Delivering'],
+    ['delivering', 'On the way'],
     ['delivered', 'Delivered'],
-    ['canceled', 'Canceled'],
+    ['canceled', 'Cancelled'],
   ] as const;
   const statusRecord = typeof counts === 'object' && counts !== null && !Array.isArray(counts)
     ? counts
@@ -231,14 +229,13 @@ function SalesByDayCard({ range }: { range: { from: string; to: string } }) {
     <AdminCard className="admin-analytics-card">
       <div className="admin-card-heading">
         <div>
-          <h2>Sales by day</h2>
-          <p>Revenue from paid orders that were not canceled, grouped by Lagos calendar day.</p>
+          <h2>Sales each day</h2>
         </div>
       </div>
       {state.loading ? <LoadingSkeleton rows={4} /> : state.error
         ? <AnalyticsError message={state.error} onRetry={retry} />
         : state.data ? <SalesChart rows={state.data} from={range.from} to={range.to} />
-          : <EmptyState>No sales are available for this date range.</EmptyState>}
+          : <EmptyState>No sales yet.</EmptyState>}
     </AdminCard>
   );
 }
@@ -250,14 +247,14 @@ function SalesChart({ rows, from, to }: {
 }) {
   const data = buildSalesChartData(rows, from, to);
   const maxRevenue = Math.max(...data.map((row) => row.revenueNgn), 0);
-  if (maxRevenue === 0) return <EmptyState>No paid sales were recorded in this date range.</EmptyState>;
+  if (maxRevenue === 0) return <EmptyState>No sales yet.</EmptyState>;
 
   return (
     <div className="admin-sales-chart-wrap">
       <div
         className="admin-sales-chart"
         role="img"
-        aria-label={`Daily revenue from paid, non-canceled orders between ${from} and ${to}.`}
+        aria-label={`Sales each day from ${from} to ${to}.`}
       >
         {data.map((row) => (
           <div className="admin-sales-chart-day" key={row.day}>
@@ -293,8 +290,7 @@ function BestSellersCard({ range }: { range: { from: string; to: string } }) {
 
   return (
     <AnalyticsListCard
-      title="Best sellers"
-      description="Units and item revenue from paid orders that were not canceled."
+      title="Top products"
       rows={state.data}
       loading={state.loading}
       error={state.error}
@@ -302,7 +298,7 @@ function BestSellersCard({ range }: { range: { from: string; to: string } }) {
       name={(row) => row.product_name}
       units={(row) => `${row.units_sold.toLocaleString('en-NG')} sold`}
       revenue={(row) => formatNaira(row.revenue_ngn)}
-      empty="No paid products were sold in this date range."
+      empty="No sales yet."
     />
   );
 }
@@ -323,8 +319,7 @@ function CategoryPerformanceCard({ range }: { range: { from: string; to: string 
 
   return (
     <AnalyticsListCard
-      title="Category performance"
-      description="Units and item revenue from paid orders that were not canceled."
+      title="Top categories"
       rows={state.data}
       loading={state.loading}
       error={state.error}
@@ -332,14 +327,13 @@ function CategoryPerformanceCard({ range }: { range: { from: string; to: string 
       name={(row) => row.category_name}
       units={(row) => `${row.units_sold.toLocaleString('en-NG')} sold`}
       revenue={(row) => formatNaira(row.revenue_ngn)}
-      empty="No paid category sales were recorded in this date range."
+      empty="No sales yet."
     />
   );
 }
 
 function AnalyticsListCard<Row extends BestSellerRow | CategoryRow>({
   title,
-  description,
   rows,
   loading,
   error,
@@ -350,7 +344,6 @@ function AnalyticsListCard<Row extends BestSellerRow | CategoryRow>({
   empty,
 }: {
   title: string;
-  description: string;
   rows: Row[] | null;
   loading: boolean;
   error: string | null;
@@ -363,7 +356,7 @@ function AnalyticsListCard<Row extends BestSellerRow | CategoryRow>({
   return (
     <AdminCard className="admin-analytics-card">
       <div className="admin-card-heading">
-        <div><h2>{title}</h2><p>{description}</p></div>
+        <div><h2>{title}</h2></div>
       </div>
       {loading ? <LoadingSkeleton /> : error
         ? <AnalyticsError message={error} onRetry={retry} />
@@ -393,7 +386,6 @@ export default function OverviewPage() {
       <header className="admin-overview-header">
         <div>
           <h2 id="admin-overview-title">Overview</h2>
-          <p>Store activity and paid sales for the selected dates.</p>
         </div>
         {controls}
       </header>

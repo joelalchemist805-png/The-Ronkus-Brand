@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type Dispatch, type MouseEvent as ReactMouseEvent, type FormEvent, type SetStateAction } from 'react';
 import { toast } from 'sonner';
 import {
   createProduct,
   deleteProduct,
   getProduct,
   getProductImageUrl,
+  getProductConfiguration,
+  listFeaturedProducts,
   listProductCategories,
   listProductImages,
   listProducts,
   listProductSubcategories,
   productHasOrders,
+  publishProductWithFeaturedPosition,
   removeProductImage,
   saveProductImageMeta,
   saveProductImagePosition,
@@ -17,6 +20,8 @@ import {
   swapProductImages,
   updateProduct,
   uploadProductImage,
+  validateCustomFieldsWithDatabase,
+  validateOptionsWithDatabase,
   type ProductImage,
   type ProductListFilters,
   type ProductWrite,
@@ -30,7 +35,6 @@ import {
   AdminPageHeader,
   AdminSelect,
   AdminTextarea,
-  AdminToggle,
   ConfirmDialog,
   EmptyState,
   LoadingState,
@@ -40,17 +44,32 @@ import {
   parseNaira,
   parseWholeNumber,
   slugify,
-  validateProductForm,
   validateProductImageFile,
   type ProductFieldErrors,
   type ProductFormValues,
 } from './helpers';
 import { resizeProductPhoto } from './image-helpers';
-import { ProductConfigEditor } from './product-config-editor';
+import {
+  ProductConfigEditor,
+  customFieldsToDraft,
+  productOptionsToDraft,
+} from './product-config-editor';
+import {
+  photoFailureNotice,
+  planProductSave,
+  validateWizardStep,
+  type ProductWizardStep,
+} from './product-workflow';
+import {
+  productConfigurationFromDraft,
+  type CustomOrderDraft,
+  type OptionGroupDraft,
+} from './product-config';
 
 type NavigateHandler = (event: ReactMouseEvent<HTMLAnchorElement>) => void;
 type NavigateTo = (path: string) => void;
 type DirtyChangeHandler = (dirty: boolean) => void;
+type PendingPhoto = { file: File; altText?: string };
 
 const pageSize = 25;
 const emptyProductValues: ProductFormValues = {
@@ -70,6 +89,15 @@ const emptyProductValues: ProductFormValues = {
   lead_time_days_max: '',
   lead_time_note: '',
   size_guide_note: '',
+};
+const emptyCustomOrder: CustomOrderDraft = {
+  enabled: false,
+  button_label: 'Request custom order',
+  flow: 'whatsapp_quote',
+  fee_ngn: '0',
+  notice: '',
+  needed_by_mode: 'off',
+  fields: [],
 };
 
 function errorText(error: unknown): string {
@@ -198,7 +226,7 @@ export function ProductsPage({ onNavigate }: { onNavigate: NavigateHandler }) {
 
   return (
     <div className="admin-page admin-products-page">
-      <AdminPageHeader title="Products" description="Manage the products shown in your storefront.">
+      <AdminPageHeader title="Products" description="Manage the products on your website.">
         <a className="admin-button admin-button-primary" href="/admin/products/new" onClick={onNavigate}>
           Add product
         </a>
@@ -318,23 +346,36 @@ export function ProductFormPage({
 }) {
   const [values, setValues] = useState<ProductFormValues>(emptyProductValues);
   const [initialValues, setInitialValues] = useState<ProductFormValues>(emptyProductValues);
+  const [options, setOptions] = useState<OptionGroupDraft[]>([]);
+  const [initialOptions, setInitialOptions] = useState<OptionGroupDraft[]>([]);
+  const [customOrder, setCustomOrder] = useState<CustomOrderDraft>(emptyCustomOrder);
+  const [initialCustomOrder, setInitialCustomOrder] = useState<CustomOrderDraft>(emptyCustomOrder);
   const [errors, setErrors] = useState<ProductFieldErrors>({});
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [subcategories, setSubcategories] = useState<{ id: string; category_id: string; name: string }[]>([]);
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+  const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [notFound, setNotFound] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hasOrders, setHasOrders] = useState<boolean | null>(id ? null : false);
   const [orderCheckFailed, setOrderCheckFailed] = useState(false);
   const [slugEdited, setSlugEdited] = useState(Boolean(id));
+  const [step, setStep] = useState<ProductWizardStep>(1);
+  const [showOnStorefront, setShowOnStorefront] = useState(true);
+  const [featureProduct, setFeatureProduct] = useState(false);
+  const [stepErrors, setStepErrors] = useState<string[]>([]);
+  const [savedHiddenMessage, setSavedHiddenMessage] = useState('');
   const [photosDirty, setPhotosDirty] = useState(false);
-  const [configDirty, setConfigDirty] = useState(false);
 
   const isDirty = !loading && (
     JSON.stringify(values) !== JSON.stringify(initialValues)
+    || JSON.stringify(options) !== JSON.stringify(initialOptions)
+    || JSON.stringify(customOrder) !== JSON.stringify(initialCustomOrder)
+    || pendingPhotos.length > 0
     || photosDirty
-    || configDirty
   );
 
   useEffect(() => {
@@ -349,6 +390,11 @@ export function ProductFormPage({
     setLoadError(null);
     setHasOrders(id ? null : false);
     setOrderCheckFailed(false);
+    const photoFailure = new URLSearchParams(window.location.search).get('photoFailure');
+    const savedHidden = new URLSearchParams(window.location.search).get('savedHidden');
+    setSavedHiddenMessage(photoFailure && /^\d+$/.test(photoFailure)
+      ? photoFailureNotice(Number(photoFailure))
+      : savedHidden === '1' ? 'Your product was saved as a hidden draft. You can show it from this page when you are ready.' : '');
     if (id && !uuidPattern.test(id)) {
       setNotFound(true);
       setLoading(false);
@@ -360,9 +406,10 @@ export function ProductFormPage({
     setLoading(true);
     const loadProductData = async () => {
       try {
-        const [categoryRows, product] = await Promise.all([
+        const [categoryRows, product, configuration] = await Promise.all([
           listProductCategories(),
           id ? getProduct(id) : Promise.resolve(null),
+          id ? getProductConfiguration(id) : Promise.resolve(null),
         ]);
         if (!active) return;
         setCategories(categoryRows);
@@ -375,6 +422,22 @@ export function ProductFormPage({
         setValues(nextValues);
         setInitialValues(nextValues);
         setSlugEdited(Boolean(id));
+        if (configuration) {
+          const nextOptions = productOptionsToDraft(configuration.options);
+          const nextCustomOrder: CustomOrderDraft = {
+            enabled: configuration.custom_request_enabled,
+            button_label: configuration.custom_request_button_label,
+            flow: configuration.custom_request_flow,
+            fee_ngn: String(configuration.custom_request_fee_ngn),
+            notice: configuration.custom_request_notice ?? '',
+            needed_by_mode: configuration.needed_by_mode,
+            fields: customFieldsToDraft(configuration.custom_request_fields),
+          };
+          setOptions(nextOptions);
+          setInitialOptions(nextOptions);
+          setCustomOrder(nextCustomOrder);
+          setInitialCustomOrder(nextCustomOrder);
+        }
         if (id) {
           void productHasOrders(id)
             .then((result) => {
@@ -399,6 +462,12 @@ export function ProductFormPage({
       active = false;
     };
   }, [id]);
+
+  useEffect(() => {
+    const urls = pendingPhotos.map(({ file }) => URL.createObjectURL(file));
+    setPhotoPreviews(urls);
+    return () => urls.forEach((url) => URL.revokeObjectURL(url));
+  }, [pendingPhotos]);
 
   useEffect(() => {
     let active = true;
@@ -431,56 +500,154 @@ export function ProductFormPage({
     setValues((current) => ({
       ...current,
       name,
-      slug: slugEdited ? current.slug : slugify(name),
+      slug: id || slugEdited ? current.slug : slugify(name) || 'product',
     }));
-    setErrors((current) => ({ ...current, name: undefined, slug: undefined }));
+    setErrors((current) => ({ ...current, name: undefined }));
+  };
+
+  const validateStep = (requestedStep: ProductWizardStep) => {
+    const result = validateWizardStep(requestedStep, values, options, customOrder);
+    const nextErrors = result.productErrors;
+    const messages = [...result.configErrors];
+    if (
+      requestedStep === 1
+      && values.subcategory_id
+      && !subcategories.some((subcategory) => subcategory.id === values.subcategory_id)
+    ) {
+      nextErrors.subcategory_id = 'Choose a type from the selected category.';
+    }
+    if (requestedStep === 1) setErrors(nextErrors);
+    setStepErrors(messages);
+    return Object.keys(nextErrors).length === 0 && messages.length === 0;
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const nextErrors = validateProductForm(values);
+    if (saving || savingRef.current) return;
+    const errorsByStep = ([1, 3, 4] as const).map((currentStep) => ({
+      step: currentStep,
+      result: validateWizardStep(currentStep, values, options, customOrder),
+    }));
+    const nextErrors = errorsByStep[0].result.productErrors;
     if (
       values.subcategory_id
       && !subcategories.some((subcategory) => subcategory.id === values.subcategory_id)
     ) {
-      nextErrors.subcategory_id = 'Choose a subcategory from the selected category.';
+      nextErrors.subcategory_id = 'Choose a type from the selected category.';
     }
     setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
+    const configErrors = errorsByStep.flatMap(({ result }) => result.configErrors);
+    setStepErrors(configErrors);
+    if (Object.keys(nextErrors).length || configErrors.length) {
+      const invalid = errorsByStep.find(({ result }) => Object.keys(result.productErrors).length || result.configErrors.length);
+      setStep(invalid?.step ?? 1);
+      return;
+    }
+    savingRef.current = true;
     setSaving(true);
+    let createdProductId: string | null = null;
+    let published = false;
     try {
-      const changes = productWrite(values);
       if (id) {
-        await updateProduct(id, changes);
+        const configuration = productConfigurationFromDraft(options, customOrder);
+        await validateOptionsWithDatabase(configuration.options);
+        await validateCustomFieldsWithDatabase(configuration.custom_request_fields);
+        const { slug: existingSlug, ...productChanges } = productWrite(values);
+        void existingSlug;
+        await updateProduct(id, { ...productChanges, ...configuration });
         setInitialValues(values);
-        toast.success('Product saved.');
+        setInitialOptions(options);
+        setInitialCustomOrder(customOrder);
+        toast.success('Product changes saved.');
       } else {
-        const productId = await createProduct(changes);
-        setInitialValues(values);
+        const configuration = productConfigurationFromDraft(options, customOrder);
+        await validateOptionsWithDatabase(configuration.options);
+        await validateCustomFieldsWithDatabase(configuration.custom_request_fields);
+        const plan = planProductSave(pendingPhotos.length, showOnStorefront, featureProduct);
+        const uploadedPositions: number[] = [];
+        for (const action of plan.actions) {
+          if (action.type === 'insert-hidden') {
+            createdProductId = await createProduct({
+              ...productWrite({ ...values, is_active: false }),
+              ...configuration,
+              is_active: false,
+              is_featured: false,
+              featured_position: null,
+            });
+          } else if (action.type === 'upload-photo' && createdProductId) {
+            const photo = pendingPhotos[action.position - 1];
+            if (!photo) continue;
+            try {
+              const resized = await resizeProductPhoto(photo.file);
+              await uploadProductImage(
+                createdProductId,
+                action.position,
+                resized,
+                photo.altText?.trim() ?? values.name.trim(),
+              );
+              uploadedPositions.push(action.position);
+            } catch {
+              let cleanupFailed = false;
+              for (const position of uploadedPositions.reverse()) {
+                try {
+                  const imageRows = await listProductImages(createdProductId);
+                  const image = imageRows.find((row) => row.position === position);
+                  if (image) await removeProductImage(image.id);
+                } catch {
+                  cleanupFailed = true;
+                }
+              }
+              onDirtyChange(false);
+              onNavigateTo(`/admin/products/${createdProductId}?photoFailure=${action.position}${cleanupFailed ? '&cleanupFailed=1' : ''}`);
+              return;
+            }
+          } else if (action.type === 'publish' && createdProductId) {
+            let featuredPosition: number | null = null;
+            if (action.featured) {
+              const featuredProducts = await listFeaturedProducts();
+              featuredPosition = featuredProducts.reduce(
+                (position, product) => Math.max(position, product.featured_position ?? 0),
+                0,
+              ) + 1;
+            }
+            await publishProductWithFeaturedPosition(createdProductId, featuredPosition);
+            published = true;
+          }
+        }
+        if (!createdProductId) throw new Error('The product could not be created.');
         onDirtyChange(false);
-        toast.success('Product created. Add photos from the edit screen.');
-        onNavigateTo(`/admin/products/${productId}`);
+        toast.success(showOnStorefront ? 'Product added to your website.' : 'Product saved as a hidden draft.');
+        onNavigateTo(`/admin/products/${createdProductId}${published ? '' : '?savedHidden=1'}`);
       }
     } catch (error) {
       const message = errorText(error);
-      if (message === 'That web address is already used by another product.') {
-        setErrors((current) => ({ ...current, slug: message }));
+      if (!id && createdProductId && !published) {
+        onDirtyChange(false);
+        toast.error(message);
+        onNavigateTo(`/admin/products/${createdProductId}?savedHidden=1`);
       } else {
         toast.error(message);
       }
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
 
-  const hideFromStorefront = async () => {
-    if (!id) return;
-    await setProductActive(id, false);
-    const nextValues = { ...values, is_active: false };
-    setValues(nextValues);
-    setInitialValues(nextValues);
-    toast.success('Product hidden from the storefront.');
+  const toggleProductVisibility = async () => {
+    if (!id || saving) return;
+    setSaving(true);
+    try {
+      const isActive = !values.is_active;
+      await setProductActive(id, isActive);
+      setValues((current) => ({ ...current, is_active: isActive }));
+      setInitialValues((current) => ({ ...current, is_active: isActive }));
+      toast.success(isActive ? 'Product shown on your website.' : 'Product hidden from your website.');
+    } catch (error) {
+      toast.error(errorText(error));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const confirmDelete = async () => {
@@ -513,225 +680,258 @@ export function ProductFormPage({
     <div className="admin-page admin-product-form-page">
       <AdminPageHeader
         title={id ? 'Edit product' : 'Add product'}
-        description={id ? 'Update this product’s storefront details.' : 'Create the product details first; photos can be added after saving.'}
+        description={id ? 'Update this product’s details, choices, and customisation.' : 'Set up your product one step at a time.'}
       >
         <a className="admin-button admin-button-secondary" href="/admin/products" onClick={onNavigate}>Back to products</a>
       </AdminPageHeader>
-      {!id && <p className="admin-note">Save this product to open its edit screen, where you can add up to three photos.</p>}
+      {savedHiddenMessage && (
+        <p className="admin-alert" role="status">
+          {new URLSearchParams(window.location.search).has('photoFailure') && id
+            ? <>
+              Your product was saved as hidden but photo {new URLSearchParams(window.location.search).get('photoFailure')} did not upload.{' '}
+              <a href={`#product-photo-slot-${new URLSearchParams(window.location.search).get('photoFailure')}`}>Add it here.</a>
+            </>
+            : savedHiddenMessage}
+          {new URLSearchParams(window.location.search).get('cleanupFailed') === '1' && (
+            <> Some earlier photos could not be removed; review the Photos section.</>
+          )}
+        </p>
+      )}
+      {id && (
+        <div className="admin-product-visibility">
+          <strong>{values.is_active ? 'Showing on your website' : 'Hidden'}</strong>
+          <AdminButton type="button" variant="secondary" disabled={saving} onClick={() => void toggleProductVisibility()}>
+            {values.is_active ? 'Hide' : 'Show'}
+          </AdminButton>
+        </div>
+      )}
 
       <form className="admin-form admin-product-form" onSubmit={(event) => void submit(event)} noValidate>
-        <AdminCard className="admin-product-section">
-          <h2>Basics</h2>
-          <div className="admin-form-grid">
-            <AdminInput
-              id="product-name"
-              label="Name"
-              value={values.name}
-              onChange={changeName}
-              error={errors.name}
-              required
-              autoComplete="off"
-            />
-            <AdminInput
-              id="product-slug"
-              label="Web address slug"
-              value={values.slug}
-              onChange={(value) => setField('slug', value.toLowerCase())}
-              error={errors.slug}
-              hint={`Storefront path: /product/${values.slug || 'your-product-name'}`}
-              showHintWithError
-              readOnly={Boolean(id)}
-              required
-              autoComplete="off"
-            />
-            <AdminNairaInput
-              id="product-price"
-              label="Price"
-              value={values.price_ngn}
-              onChange={(value) => setField('price_ngn', value)}
-              error={errors.price_ngn}
-              required
-              inputMode="numeric"
-            />
-            <AdminInput
-              id="product-price-suffix"
-              label="Price suffix (optional)"
-              value={values.price_suffix}
-              onChange={(value) => setField('price_suffix', value)}
-              error={errors.price_suffix}
-              hint="For example, per yard."
-              maxLength={40}
-            />
-            <AdminSelect
-              id="product-category"
-              label="Category"
-              value={values.category_id}
-              onChange={(value) => {
-                setField('category_id', value);
-                setValues((current) => ({ ...current, subcategory_id: '' }));
-              }}
-              error={errors.category_id}
-              options={[
-                { value: '', label: 'Choose a category' },
-                ...categories.map((category) => ({ value: category.id, label: category.name })),
-              ]}
-            />
-            <AdminSelect
-              id="product-subcategory"
-              label="Subcategory (optional)"
-              value={values.subcategory_id}
-              onChange={(value) => setField('subcategory_id', value)}
-              error={errors.subcategory_id}
-              disabled={!values.category_id}
-              options={[
-                { value: '', label: 'No subcategory' },
-                ...subcategories.map((subcategory) => ({ value: subcategory.id, label: subcategory.name })),
-              ]}
-            />
-            <AdminSelect
-              id="product-audience"
-              label="Audience"
-              value={values.audience}
-              onChange={(value) => setField('audience', value as ProductFormValues['audience'])}
-              options={[
-                { value: 'male', label: 'Male' },
-                { value: 'female', label: 'Female' },
-                { value: 'unisex', label: 'Unisex' },
-              ]}
-            />
-            <AdminSelect
-              id="product-availability"
-              label="Availability"
-              value={values.availability}
-              onChange={(value) => setField('availability', value as ProductFormValues['availability'])}
-              options={[
-                { value: 'ready_to_order', label: availabilityLabels.ready_to_order },
-                { value: 'made_to_order', label: availabilityLabels.made_to_order },
-                { value: 'out_of_stock', label: availabilityLabels.out_of_stock },
-              ]}
-            />
-            <AdminTextarea
-              id="product-description"
-              label="Description"
-              value={values.description}
-              onChange={(value) => setField('description', value)}
-              rows={4}
-            />
-            <AdminToggle
-              id="product-is-active"
-              label="Visible on storefront"
-              checked={values.is_active}
-              onChange={(checked) => setField('is_active', checked)}
-            />
-          </div>
-        </AdminCard>
-
-        <AdminCard className="admin-product-section">
-          <h2>Order rules</h2>
-          <div className="admin-form-grid">
-            <AdminNumberInput
-              id="product-min-order"
-              label="Minimum order quantity"
-              value={values.min_order_qty}
-              onChange={(value) => setField('min_order_qty', value)}
-              error={errors.min_order_qty}
-              min={1}
-              required
-              inputMode="numeric"
-            />
-            <AdminNumberInput
-              id="product-max-order"
-              label="Maximum order quantity (optional)"
-              value={values.max_order_qty}
-              onChange={(value) => setField('max_order_qty', value)}
-              error={errors.max_order_qty}
-              min={1}
-              inputMode="numeric"
-            />
-            <AdminNumberInput
-              id="product-lead-min"
-              label="Minimum lead time in days (optional)"
-              value={values.lead_time_days_min}
-              onChange={(value) => setField('lead_time_days_min', value)}
-              error={errors.lead_time_days_min}
-              min={0}
-              inputMode="numeric"
-            />
-            <AdminNumberInput
-              id="product-lead-max"
-              label="Maximum lead time in days (optional)"
-              value={values.lead_time_days_max}
-              onChange={(value) => setField('lead_time_days_max', value)}
-              error={errors.lead_time_days_max}
-              min={0}
-              inputMode="numeric"
-            />
-            <AdminTextarea
-              id="product-lead-note"
-              label="Lead-time note (optional)"
-              value={values.lead_time_note}
-              onChange={(value) => setField('lead_time_note', value)}
-            />
-            <AdminTextarea
-              id="product-size-note"
-              label="Size-guide note (optional)"
-              value={values.size_guide_note}
-              onChange={(value) => setField('size_guide_note', value)}
-            />
-          </div>
-        </AdminCard>
-
-        <div className="admin-form-actions admin-product-save-actions">
-          <AdminButton type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save product'}</AdminButton>
-          {isDirty && <span className="admin-inline-note">Unsaved changes</span>}
-        </div>
-      </form>
-
-      {id && (
-        <>
-          <ProductConfigEditor productId={id} onDirtyChange={setConfigDirty} />
-          <ProductPhotos productId={id} productName={values.name} onDirtyChange={setPhotosDirty} />
-          <AdminCard className="admin-product-danger-zone">
-            <h2>Storefront and deletion</h2>
-            {hasOrders === null
-              ? <p className="admin-inline-note">
-                {orderCheckFailed
-                  ? 'Order history could not be verified. Deletion is unavailable; reload this product to retry.'
-                  : 'Checking order history. Deletion is unavailable until the check finishes.'}
-              </p>
-              : hasOrders
-                ? (
-                  <>
-                    <p className="admin-inline-note">This product appears in order history and cannot be deleted. Hide it from the storefront instead.</p>
-                    {values.is_active && (
-                      <ConfirmDialog
-                        label="Hide this product?"
-                        message="The product will no longer appear in the storefront. Its order history will remain unchanged."
-                        confirmLabel="Hide product"
-                        onConfirm={hideFromStorefront}
-                      >
-                        <AdminButton type="button" variant="secondary" disabled={isDirty}>Hide from storefront</AdminButton>
-                      </ConfirmDialog>
-                    )}
-                  </>
-                )
-                : (
-                  <>
-                    <p className="admin-inline-note">Deleting removes this product and its photo records. Its uploaded photo files will also be deleted.</p>
-                    <ConfirmDialog
-                      label="Delete this product?"
-                      message="This permanently deletes the product and its photos. Products that appear in order history cannot be deleted."
-                      confirmLabel="Delete product"
-                      onConfirm={confirmDelete}
-                    >
+        {!id ? (
+          <>
+            <div className="admin-product-progress" aria-label={`Step ${step} of 5`}>
+              <progress value={step} max={5} aria-label={`Step ${step} of 5`} />
+              <strong>Step {step} of 5</strong>
+            </div>
+            {step === 1 && <AdminCard className="admin-product-section">
+              <h2>About the product</h2>
+              {aboutFields(values, errors, categories, subcategories, setField, changeName, setValues, false)}
+            </AdminCard>}
+            {step === 2 && <AdminCard className="admin-product-section">
+              <div>
+                <h2>Photos</h2>
+                <p>Add up to three photos. Choose an image file or open your camera.</p>
+              </div>
+              <div className="admin-product-photo-slots">
+                {[0, 1, 2].map((position) => {
+                  const photo = pendingPhotos[position];
+                  const label = position === 0 ? 'Main photo' : `Photo ${position + 1}`;
+                  return (
+                    <section className="admin-product-photo-slot" key={position} aria-label={label}>
+                      <h3>{label}</h3>
+                      {photo
+                        ? <img className="admin-product-photo-preview" src={photoPreviews[position]} alt={photo.altText || values.name} />
+                        : <div className="admin-product-photo-preview admin-product-thumbnail-empty">No photo selected</div>}
+                      <div className="admin-form-actions">
+                        <label className="admin-button admin-button-secondary">
+                          Choose from gallery or files
+                          <input
+                            className="admin-visually-hidden"
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            disabled={!photo && position > pendingPhotos.length}
+                            aria-label={`Choose ${label} from gallery or files`}
+                            onChange={(event) => {
+                              const file = event.currentTarget.files?.[0];
+                              event.currentTarget.value = '';
+                              if (!file) return;
+                              const validationError = validateProductImageFile(file);
+                              if (validationError) return void toast.error(validationError);
+                              setPendingPhotos((current) => {
+                                const next = [...current];
+                                next[position] = { file, altText: next[position]?.altText };
+                                return next;
+                              });
+                            }}
+                          />
+                        </label>
+                        <label className="admin-button admin-button-secondary">
+                          Take a photo
+                          <input
+                            className="admin-visually-hidden"
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            capture="environment"
+                            disabled={!photo && position > pendingPhotos.length}
+                            aria-label={`Take ${label}`}
+                            onChange={(event) => {
+                              const file = event.currentTarget.files?.[0];
+                              event.currentTarget.value = '';
+                              if (!file) return;
+                              const validationError = validateProductImageFile(file);
+                              if (validationError) return void toast.error(validationError);
+                              setPendingPhotos((current) => {
+                                const next = [...current];
+                                next[position] = { file, altText: next[position]?.altText };
+                                return next;
+                              });
+                            }}
+                          />
+                        </label>
+                      </div>
+                      {photo && <>
+                        <AdminInput
+                          id={`pending-photo-alt-${position}`}
+                          label="Describe this photo (optional)"
+                          value={photo.altText ?? values.name}
+                          onChange={(altText) => setPendingPhotos((current) => current.map((item, index) => index === position ? { ...item, altText } : item))}
+                        />
+                        <div className="admin-form-actions">
+                          <AdminButton type="button" variant="secondary" disabled={position === 0} onClick={() => setPendingPhotos((current) => {
+                            const next = [...current];
+                            [next[position - 1], next[position]] = [next[position], next[position - 1]];
+                            return next;
+                          })}>Move left</AdminButton>
+                          <AdminButton type="button" variant="secondary" disabled={position >= pendingPhotos.length - 1} onClick={() => setPendingPhotos((current) => {
+                            const next = [...current];
+                            [next[position], next[position + 1]] = [next[position + 1], next[position]];
+                            return next;
+                          })}>Move right</AdminButton>
+                          <AdminButton type="button" variant="danger" onClick={() => setPendingPhotos((current) => current.filter((_, index) => index !== position))}>Remove photo</AdminButton>
+                        </div>
+                      </>}
+                    </section>
+                  );
+                })}
+              </div>
+            </AdminCard>}
+            {step === 3 && <ProductConfigEditor section="options" options={options} customOrder={customOrder} onOptionsChange={setOptions} onCustomOrderChange={setCustomOrder} />}
+            {step === 4 && <ProductConfigEditor section="custom" options={options} customOrder={customOrder} onOptionsChange={setOptions} onCustomOrderChange={setCustomOrder} />}
+            {step === 5 && <AdminCard className="admin-product-section">
+              <h2>Review and add</h2>
+              <dl className="admin-product-review">
+                <div><dt>Name</dt><dd>{values.name || 'Not set'}</dd></div>
+                <div><dt>Price</dt><dd>{values.price_ngn ? formatNaira(parseNaira(values.price_ngn) ?? 0) : 'Not set'}{values.price_suffix ? ` ${values.price_suffix}` : ''}</dd></div>
+                <div><dt>Category and type</dt><dd>{categories.find(({ id: categoryId }) => categoryId === values.category_id)?.name ?? 'Not set'}{values.subcategory_id ? ` · ${subcategories.find(({ id: subcategoryId }) => subcategoryId === values.subcategory_id)?.name ?? ''}` : ''}</dd></div>
+                <div><dt>Who it is for</dt><dd>{{ male: 'Men', female: 'Women', unisex: 'Unisex' }[values.audience]}</dd></div>
+                <div><dt>Availability</dt><dd>{availabilityLabels[values.availability]}</dd></div>
+                <div><dt>Description</dt><dd>{values.description}</dd></div>
+                <div><dt>Web address</dt><dd>/product/{values.slug}</dd></div>
+                <div><dt>More ordering options</dt><dd>
+                  Minimum {values.min_order_qty || '1'} · Maximum {values.max_order_qty || 'No limit'}
+                  {values.lead_time_days_min || values.lead_time_days_max
+                    ? ` · Lead time ${values.lead_time_days_min || '0'}–${values.lead_time_days_max || 'unspecified'} days`
+                    : ''}
+                  {values.lead_time_note ? ` · ${values.lead_time_note}` : ''}
+                  {values.size_guide_note ? ` · Size guide: ${values.size_guide_note}` : ''}
+                </dd></div>
+                <div><dt>Photos</dt><dd>{pendingPhotos.length ? pendingPhotos.map(({ file }) => file.name).join(', ') : 'None'} ({pendingPhotos.length} of 3)</dd></div>
+                <div><dt>Choices</dt><dd>{options.length ? options.map((group) => group.type === 'choice'
+                  ? `${group.label}: ${group.values.map(({ label }) => label).join(', ')}`
+                  : `${group.label}: ${group.min}–${group.max} ${group.unit}`).join(' · ') : 'None'}</dd></div>
+                <div><dt>Customising</dt><dd>{customOrder.enabled
+                  ? `${customOrder.button_label}; ${customOrder.flow === 'checkout' ? 'Pay at checkout' : 'WhatsApp quote'}; extra charge ${formatNaira(parseNaira(customOrder.fee_ngn) ?? 0)}; needed-by date ${customOrder.needed_by_mode}; questions: ${customOrder.fields.map(({ label }) => label).join(', ')}${customOrder.notice ? `; message: ${customOrder.notice}` : ''}`
+                  : 'Off'}</dd></div>
+              </dl>
+              <fieldset className="admin-product-publish-choice">
+                <legend>Where should this product appear?</legend>
+                <label><input type="radio" name="publish-choice" checked={showOnStorefront} onChange={() => { setShowOnStorefront(true); }} /> Show on your website now</label>
+                <label><input type="radio" name="publish-choice" checked={!showOnStorefront} onChange={() => { setShowOnStorefront(false); setFeatureProduct(false); }} /> Save as hidden draft</label>
+                <label className="admin-toggle">
+                  <input type="checkbox" checked={featureProduct} disabled={!showOnStorefront} onChange={(event) => setFeatureProduct(event.target.checked)} />
+                  <span className="admin-toggle-track" aria-hidden="true" />
+                  <span>Also show in the homepage Featured section</span>
+                </label>
+              </fieldset>
+            </AdminCard>}
+            {stepErrors.length > 0 && <div className="admin-config-errors" role="alert">{stepErrors.map((message, index) => <p key={`${message}-${index}`}>{message}</p>)}</div>}
+            <div className="admin-form-actions admin-product-wizard-actions">
+              {step > 1 && <AdminButton type="button" variant="secondary" disabled={saving} onClick={() => { setStepErrors([]); setStep((current) => (current - 1) as ProductWizardStep); }}>Back</AdminButton>}
+              {step < 5
+                ? <AdminButton type="button" disabled={saving} onClick={() => {
+                  if (!validateStep(step)) return;
+                  setStepErrors([]);
+                  setStep((current) => (current + 1) as ProductWizardStep);
+                }}>Next</AdminButton>
+                : <AdminButton type="submit" disabled={saving}>{saving ? 'Adding product…' : 'Add product'}</AdminButton>}
+            </div>
+          </>
+        ) : (
+          <>
+            <details className="admin-product-collapse" open>
+              <summary>About the product</summary>
+              {aboutFields(values, errors, categories, subcategories, setField, changeName, setValues, true)}
+            </details>
+            <details className="admin-product-collapse" open={new URLSearchParams(window.location.search).has('photoFailure')}>
+              <summary>Photos</summary>
+              <ProductPhotos productId={id} productName={values.name} onDirtyChange={setPhotosDirty} />
+            </details>
+            <details className="admin-product-collapse">
+              <summary>Choices customers make</summary>
+              <ProductConfigEditor section="options" options={options} customOrder={customOrder} onOptionsChange={setOptions} onCustomOrderChange={setCustomOrder} />
+            </details>
+            <details className="admin-product-collapse">
+              <summary>Customising</summary>
+              <ProductConfigEditor section="custom" options={options} customOrder={customOrder} onOptionsChange={setOptions} onCustomOrderChange={setCustomOrder} />
+            </details>
+            <AdminCard className="admin-product-danger-zone">
+              <h2>Delete product</h2>
+              {hasOrders === null
+                ? <p className="admin-inline-note">{orderCheckFailed ? 'Order history could not be verified. Deletion is unavailable; reload this product to retry.' : 'Checking order history. Deletion is unavailable until the check finishes.'}</p>
+                : hasOrders
+                  ? <p className="admin-inline-note">This product has orders and cannot be deleted. Hide it from your website instead.</p>
+                  : <>
+                    <p className="admin-inline-note">Deleting removes this product and its photo records and uploaded files.</p>
+                    <ConfirmDialog label="Delete this product?" message="This permanently deletes the product and its photos. Products that appear in order history cannot be deleted." confirmLabel="Delete product" onConfirm={confirmDelete}>
                       <AdminButton type="button" variant="danger" disabled={isDirty}>Delete product</AdminButton>
                     </ConfirmDialog>
-                  </>
-                )}
-          </AdminCard>
-        </>
-      )}
+                  </>}
+            </AdminCard>
+            <div className="admin-product-sticky-save">
+              <AdminButton type="submit" disabled={saving || !isDirty}>{saving ? 'Saving…' : 'Save changes'}</AdminButton>
+              {isDirty && <span className="admin-inline-note">Unsaved changes</span>}
+            </div>
+          </>
+        )}
+      </form>
     </div>
+  );
+}
+
+function aboutFields(
+  values: ProductFormValues,
+  errors: ProductFieldErrors,
+  categories: { id: string; name: string }[],
+  subcategories: { id: string; category_id: string; name: string }[],
+  setField: <K extends keyof ProductFormValues>(field: K, value: ProductFormValues[K]) => void,
+  changeName: (name: string) => void,
+  setValues: Dispatch<SetStateAction<ProductFormValues>>,
+  editing: boolean,
+) {
+  return (
+    <AdminCard className="admin-product-section">
+      <div className="admin-form-grid">
+        <AdminInput id="product-name" label="Name" value={values.name} onChange={changeName} error={errors.name} required autoComplete="off" />
+        <AdminNairaInput id="product-price" label="Price (naira)" value={values.price_ngn} onChange={(value) => setField('price_ngn', value)} error={errors.price_ngn} required inputMode="numeric" hint="Enter the price in whole naira." />
+        <AdminInput id="product-price-suffix" label="Price unit (optional)" value={values.price_suffix} onChange={(value) => setField('price_suffix', value)} error={errors.price_suffix} hint="for example per yard" maxLength={40} />
+        <AdminSelect id="product-category" label="Category" value={values.category_id} onChange={(value) => { setField('category_id', value); setValues((current) => ({ ...current, subcategory_id: '' })); }} error={errors.category_id} options={[{ value: '', label: 'Choose a category' }, ...categories.map(({ id: categoryId, name }) => ({ value: categoryId, label: name }))]} />
+        <AdminSelect id="product-subcategory" label="Type of product" value={values.subcategory_id} onChange={(value) => setField('subcategory_id', value)} error={errors.subcategory_id} disabled={!values.category_id} hint="Choose a more specific type, if it applies." options={[{ value: '', label: 'Choose a type (optional)' }, ...subcategories.map(({ id: subcategoryId, name }) => ({ value: subcategoryId, label: name }))]} />
+        <AdminSelect id="product-audience" label="Who is it for?" value={values.audience} onChange={(value) => setField('audience', value as ProductFormValues['audience'])} hint="Choose who this product is made for." options={[{ value: 'male', label: 'Men' }, { value: 'female', label: 'Women' }, { value: 'unisex', label: 'Unisex' }]} />
+        <AdminSelect id="product-availability" label="Availability" value={values.availability} onChange={(value) => setField('availability', value as ProductFormValues['availability'])} hint="Let customers know whether it can be ordered now." options={[{ value: 'ready_to_order', label: availabilityLabels.ready_to_order }, { value: 'made_to_order', label: availabilityLabels.made_to_order }, { value: 'out_of_stock', label: availabilityLabels.out_of_stock }]} />
+        <AdminTextarea id="product-description" label="Description" value={values.description} onChange={(value) => setField('description', value)} error={errors.description} rows={4} required hint="Tell customers what makes this product special." />
+      </div>
+      <details className="admin-product-subsection">
+        <summary>More ordering options (optional)</summary>
+        <div className="admin-form-grid">
+          <AdminNumberInput id="product-min-order" label="Minimum quantity" value={values.min_order_qty} onChange={(value) => setField('min_order_qty', value)} error={errors.min_order_qty} min={1} required inputMode="numeric" />
+          <AdminNumberInput id="product-max-order" label="Maximum quantity" value={values.max_order_qty} onChange={(value) => setField('max_order_qty', value)} error={errors.max_order_qty} min={1} inputMode="numeric" />
+          <AdminNumberInput id="product-lead-min" label="Minimum lead time in days" value={values.lead_time_days_min} onChange={(value) => setField('lead_time_days_min', value)} error={errors.lead_time_days_min} min={0} inputMode="numeric" />
+          <AdminNumberInput id="product-lead-max" label="Maximum lead time in days" value={values.lead_time_days_max} onChange={(value) => setField('lead_time_days_max', value)} error={errors.lead_time_days_max} min={0} inputMode="numeric" />
+          <AdminTextarea id="product-lead-note" label="Lead-time note" value={values.lead_time_note} onChange={(value) => setField('lead_time_note', value)} hint="Optional details about how long an order takes." />
+          <AdminTextarea id="product-size-note" label="Size-guide note" value={values.size_guide_note} onChange={(value) => setField('size_guide_note', value)} hint="Optional sizing advice for customers." />
+        </div>
+      </details>
+    </AdminCard>
   );
 }
 
@@ -754,9 +954,9 @@ function ProductPhotos({
   ));
 
   useEffect(() => {
-    onDirtyChange(photoDraftsDirty);
+    onDirtyChange(photoDraftsDirty || busy);
     return () => onDirtyChange(false);
-  }, [onDirtyChange, photoDraftsDirty]);
+  }, [busy, onDirtyChange, photoDraftsDirty]);
 
   const refresh = useCallback(async () => {
     try {
@@ -862,7 +1062,7 @@ function ProductPhotos({
       <div className="admin-card-heading">
         <div>
           <h2>Photos</h2>
-          <p>Upload up to three photos. The first photo is the storefront thumbnail.</p>
+          <p>Upload up to three photos. The first photo appears in product lists.</p>
         </div>
         {images && <span className="admin-status">{images.length} of 3</span>}
       </div>
@@ -875,7 +1075,7 @@ function ProductPhotos({
             const label = position === 1 ? 'Main photo' : `Photo ${position}`;
             const altText = image ? altDrafts[image.id] ?? image.alt_text : '';
             return (
-              <section key={position} className="admin-product-photo-slot" aria-label={`${label} slot`}>
+              <section key={position} id={`product-photo-slot-${position}`} className="admin-product-photo-slot" aria-label={`${label} slot`}>
                 <div className="admin-product-photo-heading">
                   <h3>{label}</h3>
                   {image && <span className="admin-status">{position} of 3</span>}
@@ -884,27 +1084,45 @@ function ProductPhotos({
                   ? <img className="admin-product-photo-preview" src={getProductImageUrl(image.storage_path)} alt={image.alt_text} />
                   : <div className="admin-product-photo-preview admin-product-thumbnail-empty">Empty photo slot</div>}
 
-                <div className="admin-field admin-product-file-field">
-                  <label htmlFor={`product-photo-${position}`}>{image ? 'Replace photo' : 'Add photo'}</label>
-                  <input
-                    id={`product-photo-${position}`}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    capture="environment"
-                    disabled={busy || (!image && images.length >= 3)}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                      const file = event.target.files?.[0];
-                      event.currentTarget.value = '';
-                      if (file) void upload(position, image, file);
-                    }}
-                  />
+                <div className="admin-form-actions">
+                  <label className="admin-button admin-button-secondary">
+                    Choose from gallery or files
+                    <input
+                      className="admin-visually-hidden"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={busy || (!image && images.length >= 3)}
+                      aria-label={`Choose ${label} from gallery or files`}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        const file = event.target.files?.[0];
+                        event.currentTarget.value = '';
+                        if (file) void upload(position, image, file);
+                      }}
+                    />
+                  </label>
+                  <label className="admin-button admin-button-secondary">
+                    Take a photo
+                    <input
+                      className="admin-visually-hidden"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      capture="environment"
+                      disabled={busy || (!image && images.length >= 3)}
+                      aria-label={`Take ${label}`}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        const file = event.target.files?.[0];
+                        event.currentTarget.value = '';
+                        if (file) void upload(position, image, file);
+                      }}
+                    />
+                  </label>
                 </div>
                 {uploadingPosition === position && <p className="admin-inline-note" role="status">Optimizing and uploading photo…</p>}
                 {image && (
                   <>
                     <AdminInput
                       id={`product-photo-alt-${image.id}`}
-                      label="Alternative text"
+                      label="Describe this photo (optional)"
                       value={altText}
                       onChange={(value) => setAltDrafts((current) => ({ ...current, [image.id]: value }))}
                     />
@@ -918,7 +1136,7 @@ function ProductPhotos({
                           'Photo description saved.',
                         )}
                       >
-                        Save alt text
+                        Save description
                       </AdminButton>
                       <AdminButton
                         type="button"

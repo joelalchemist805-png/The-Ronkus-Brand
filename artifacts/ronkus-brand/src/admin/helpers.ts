@@ -73,6 +73,16 @@ export function slugify(value: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+export function uniqueSlugFromName(name: string, existingSlugs: Iterable<string>): string {
+  const base = slugify(name) || 'item';
+  const existing = new Set(Array.from(existingSlugs, (slug) => slug.toLowerCase()));
+  if (!existing.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+}
+
 export function validateProductForm(values: ProductFormValues): ProductFieldErrors {
   const maxDatabaseInteger = 2_147_483_647;
   const errors: ProductFieldErrors = {};
@@ -90,9 +100,6 @@ export function validateProductForm(values: ProductFormValues): ProductFieldErro
     : null;
 
   if (!name) errors.name = 'Enter a product name.';
-  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(values.slug.trim())) {
-    errors.slug = 'Use lowercase letters, numbers, and hyphens for the web address.';
-  }
   if (price === null || price < 0 || price > maxDatabaseInteger) {
     errors.price_ngn = 'Enter a whole naira amount of zero or more.';
   }
@@ -164,6 +171,80 @@ export function buildProductImageStoragePath(
     ? timestamp
     : Date.now();
   return `products/${productId}/${safeTimestamp}-${safeProductImageFilename(filename)}`;
+}
+
+export function buildCategoryImageStoragePath(
+  categoryId: string,
+  filename: string,
+  timestamp = Date.now(),
+): string {
+  if (!/^[a-zA-Z0-9_-]+$/.test(categoryId)) {
+    throw new Error('The category could not be found.');
+  }
+  const safeTimestamp = Number.isSafeInteger(timestamp) && timestamp >= 0
+    ? timestamp
+    : Date.now();
+  const name = safeProductImageFilename(filename).replace(/\.[^.]+$/, '');
+  return `categories/${categoryId}/${safeTimestamp}-${name}.webp`;
+}
+
+export function buildCategoryImagePublicUrl(publicBucketUrl: string, storagePath: string): string {
+  const safePath = categoryImageStoragePathToDelete(storagePath);
+  if (!safePath || safePath !== storagePath) {
+    throw new Error('The category photo path is not valid.');
+  }
+  const url = new URL(publicBucketUrl);
+  const bucketPath = '/storage/v1/object/public/product-images/';
+  const bucketIndex = url.pathname.indexOf(bucketPath);
+  if (bucketIndex < 0) throw new Error('The category photo link could not be created.');
+  url.pathname = `${url.pathname.slice(0, bucketIndex)}${bucketPath}${storagePath
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}`;
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
+export function categoryImageStoragePathToDelete(
+  imagePath: string,
+  expectedOrigin?: string,
+): string | null {
+  let objectPath = imagePath;
+  if (/^https?:\/\//i.test(imagePath)) {
+    try {
+      const url = new URL(imagePath);
+      const prefix = '/storage/v1/object/public/product-images/';
+      if (!expectedOrigin || url.origin !== expectedOrigin || !url.pathname.startsWith(prefix)) return null;
+      objectPath = url.pathname.slice(prefix.length);
+    } catch {
+      return null;
+    }
+  }
+  let decodedPath: string;
+  try {
+    decodedPath = objectPath.split('/').map(decodeURIComponent).join('/');
+  } catch {
+    return null;
+  }
+  const parts = decodedPath.split('/');
+  if (
+    parts.length !== 3
+    || parts[0] !== 'categories'
+    || !/^[a-zA-Z0-9_-]+$/.test(parts[1])
+    || !/^[a-zA-Z0-9._-]+$/.test(parts[2])
+    || parts.some((part) => part === '.' || part === '..')
+  ) {
+    return null;
+  }
+  return decodedPath;
+}
+
+export function keepMobileMenuOpenAfterNavigation(
+  isOpen: boolean,
+  navigationSucceeded: boolean,
+): boolean {
+  return isOpen && !navigationSucceeded;
 }
 
 export function parseNaira(value: string): number | null {
@@ -335,6 +416,26 @@ export function formatLagosDateTime(value: string | null): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(date);
+}
+
+export function formatReadableLagosDateTime(value: string | null, label: 'Starts' | 'Ends'): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Lagos',
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hourCycle: 'h12',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((entry) => entry.type === type)?.value ?? '';
+  const dayPeriod = part('dayPeriod').toUpperCase();
+  return `${label} ${part('weekday')} ${part('day')} ${part('month')} ${part('year')}, ${part('hour')}:${part('minute')} ${dayPeriod}`;
 }
 
 export function validatePromoLinkUrl(value: string): string | null {

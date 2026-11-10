@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildProductImageStoragePath,
+  buildCategoryImagePublicUrl,
+  buildCategoryImageStoragePath,
   buildSalesChartData,
+  categoryImageStoragePathToDelete,
   formatNaira,
+  formatReadableLagosDateTime,
+  keepMobileMenuOpenAfterNavigation,
   getAnalyticsDateRange,
   isValidAnalyticsDateRange,
   isInactivityExpired,
@@ -14,6 +19,7 @@ import {
   shouldBlockForSignedIn,
   slugify,
   toLagosIso,
+  uniqueSlugFromName,
   validateCouponForm,
   validateProductForm,
   validateProductImageFile,
@@ -97,6 +103,13 @@ test('slugify lowercases and hyphenates names consistently', () => {
   assert.equal(slugify('Café / Head Wraps'), 'cafe-head-wraps');
 });
 
+test('unique slugs add the first available number to repeated names', () => {
+  assert.equal(uniqueSlugFromName('Café Bag', []), 'cafe-bag');
+  assert.equal(uniqueSlugFromName('Café Bag', ['cafe-bag']), 'cafe-bag-2');
+  assert.equal(uniqueSlugFromName('Café Bag', ['cafe-bag', 'cafe-bag-2']), 'cafe-bag-3');
+  assert.equal(uniqueSlugFromName('東京', ['item']), 'item-2');
+});
+
 test('product validation requires a name and a non-negative whole naira price', () => {
   assert.deepEqual(validateProductForm(productValues()), {});
   const errors = validateProductForm(productValues({
@@ -134,6 +147,46 @@ test('product slug and image storage names handle punctuation and accents safely
     buildProductImageStoragePath('product-id', 'Café & Table (MAIN).webp', 123),
     'products/product-id/123-cafe-table-main.webp',
   );
+});
+
+test('category image paths use safe names and old-file cleanup is limited to category uploads', () => {
+  const categoryPath = buildCategoryImageStoragePath('category-1', 'Café & Table.png', 123);
+  assert.equal(
+    categoryPath,
+    'categories/category-1/123-cafe-table.webp',
+  );
+  assert.equal(
+    buildCategoryImagePublicUrl(
+      'https://example.supabase.co/storage/v1/object/public/product-images/',
+      categoryPath,
+    ),
+    'https://example.supabase.co/storage/v1/object/public/product-images/categories/category-1/123-cafe-table.webp',
+  );
+  assert.equal(
+    categoryImageStoragePathToDelete(
+      'https://example.supabase.co/storage/v1/object/public/product-images/categories/category-1/123-cafe-table.webp',
+      'https://example.supabase.co',
+    ),
+    'categories/category-1/123-cafe-table.webp',
+  );
+  assert.equal(categoryImageStoragePathToDelete('categories/category-1/123-cafe-table.webp'), 'categories/category-1/123-cafe-table.webp');
+  assert.equal(
+    categoryImageStoragePathToDelete(
+      'https://attacker.example/storage/v1/object/public/product-images/categories/category-1/123-cafe-table.webp',
+      'https://example.supabase.co',
+    ),
+    null,
+  );
+  assert.equal(categoryImageStoragePathToDelete('/assets/category.webp'), null);
+  assert.equal(categoryImageStoragePathToDelete('products/product-1/photo.webp'), null);
+  assert.equal(categoryImageStoragePathToDelete('https://example.com/photo.webp'), null);
+  assert.equal(categoryImageStoragePathToDelete('categories/../secret.webp'), null);
+});
+
+test('mobile menu stays open when guarded navigation is cancelled and closes after success', () => {
+  assert.equal(keepMobileMenuOpenAfterNavigation(true, false), true);
+  assert.equal(keepMobileMenuOpenAfterNavigation(true, true), false);
+  assert.equal(keepMobileMenuOpenAfterNavigation(false, true), false);
 });
 
 test('product image validation accepts only supported formats and a maximum 5 MB', () => {
@@ -180,6 +233,15 @@ test('analytics date presets use Lagos calendar dates and inclusive preset range
   });
   assert.equal(getAnalyticsDateRange('today', new Date('2026-04-30T22:59:00.000Z')).to, '2026-04-30');
   assert.equal(getAnalyticsDateRange('today', new Date('2026-04-30T23:00:00.000Z')).to, '2026-05-01');
+});
+
+test('readable date labels use Lagos time and an unambiguous month name', () => {
+  assert.equal(
+    formatReadableLagosDateTime('2026-11-10T08:00:00.000Z', 'Starts'),
+    'Starts Tue 10 Nov 2026, 9:00 AM',
+  );
+  assert.equal(formatReadableLagosDateTime(null, 'Ends'), '');
+  assert.equal(formatReadableLagosDateTime('not-a-date', 'Ends'), '');
 });
 
 test('analytics date ranges reject invalid, reversed, or overlong ranges', () => {

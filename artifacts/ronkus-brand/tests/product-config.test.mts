@@ -11,6 +11,7 @@ import {
   optionGroupFromDraft,
   optionGroupToDraft,
   optionsRoundTrip,
+  productConfigurationFromDraft,
   quickAddNumbers,
   shoeSizesPreset,
   tailoredShirtPreset,
@@ -20,6 +21,14 @@ import {
   type CustomOrderDraft,
   type OptionGroupDraft,
 } from '../src/admin/product-config.ts';
+import {
+  colourPresetToValue,
+  colourPresets,
+  photoFailureNotice,
+  planProductSave,
+  validateWizardStep,
+} from '../src/admin/product-workflow.ts';
+import type { ProductFormValues } from '../src/admin/helpers.ts';
 
 const choiceGroup = (): OptionGroupDraft => ({
   id: 'size',
@@ -250,6 +259,36 @@ test('option and custom-field draft conversions round-trip exact database json s
   for (const field of dbFields) {
     assert.deepEqual(customFieldFromDraft(customFieldToDraft(field)), field);
   }
+  const configuration = productConfigurationFromDraft(
+    dbOptions.map(optionGroupToDraft),
+    {
+      enabled: true,
+      button_label: ' Customise ',
+      flow: 'checkout',
+      fee_ngn: '300',
+      notice: ' Send measurements ',
+      needed_by_mode: 'optional',
+      fields: dbFields.map(customFieldToDraft),
+    },
+  );
+  assert.deepEqual(configuration.options, dbOptions);
+  assert.deepEqual(configuration.custom_request_fields, dbFields);
+  assert.equal(configuration.custom_request_button_label, 'Customise');
+  assert.equal(configuration.custom_request_fee_ngn, 300);
+  assert.equal(configuration.custom_request_notice, 'Send measurements');
+  const renamedOption = optionGroupToDraft(dbOptions[0]);
+  assert.equal(renamedOption.type, 'choice');
+  if (renamedOption.type === 'choice') {
+    const renamed = optionGroupFromDraft({
+      ...renamedOption,
+      label: 'Shade',
+      values: renamedOption.values.map((value) => ({ ...value, label: 'Azure' })),
+    });
+    assert.equal(renamed.id, 'colour');
+    assert.equal(renamed.type === 'choice' ? renamed.values[0]?.value : '', 'blue');
+  }
+  const renamedField = customFieldToDraft(dbFields[0]);
+  assert.equal(customFieldFromDraft({ ...renamedField, label: 'Customer name' }).id, 'name');
 });
 
 test('migration comment presets produce valid database-shaped output', () => {
@@ -258,4 +297,82 @@ test('migration comment presets produce valid database-shaped output', () => {
   assert.deepEqual(validateCustomRequest(customOrder(tailoredShirtPreset())), []);
   assert.deepEqual(validateCustomRequest(customOrder(brandedApronPreset())), []);
   assert.equal(optionGroupFromDraft(fabricYardagePreset()).type, 'range');
+});
+
+test('colour quick-start converts named colours to unique option values and swatches', () => {
+  const black = colourPresets.find(({ label }) => label === 'Black');
+  assert.ok(black);
+  assert.deepEqual(colourPresetToValue(black, []), {
+    value: 'black',
+    label: 'Black',
+    price_delta: '0',
+    swatch: '#000000',
+    available: true,
+  });
+  assert.equal(colourPresetToValue(black, [
+    { value: 'black', label: 'Black', price_delta: '0', swatch: '#000000', available: true },
+  ]).value, 'black-2');
+  assert.deepEqual(colourPresets, [
+    { label: 'Black', hex: '#000000' },
+    { label: 'White', hex: '#FFFFFF' },
+    { label: 'Red', hex: '#C62828' },
+    { label: 'Pink', hex: '#F48FB1' },
+    { label: 'Blue', hex: '#1565C0' },
+    { label: 'Green', hex: '#2E7D32' },
+    { label: 'Yellow', hex: '#F9A825' },
+    { label: 'Orange', hex: '#EF6C00' },
+    { label: 'Purple', hex: '#6A1B9A' },
+    { label: 'Brown', hex: '#6D4C41' },
+    { label: 'Grey', hex: '#757575' },
+    { label: 'Gold', hex: '#C9A227' },
+    { label: 'Navy', hex: '#1A237E' },
+    { label: 'Cream', hex: '#F5F0E1' },
+  ]);
+});
+
+test('wizard validates each editable step with the existing product and config rules', () => {
+  const values: ProductFormValues = {
+    name: 'Linen shirt',
+    slug: 'linen-shirt',
+    description: 'Made to order linen shirt',
+    price_ngn: '12000',
+    price_suffix: '',
+    category_id: 'clothing',
+    subcategory_id: '',
+    audience: 'unisex',
+    availability: 'ready_to_order',
+    is_active: true,
+    min_order_qty: '1',
+    max_order_qty: '',
+    lead_time_days_min: '',
+    lead_time_days_max: '',
+    lead_time_note: '',
+    size_guide_note: '',
+  };
+  const config = customOrder();
+  assert.deepEqual(validateWizardStep(1, values, [], config), { productErrors: {}, configErrors: [] });
+  assert.deepEqual(validateWizardStep(2, values, [], config), { productErrors: {}, configErrors: [] });
+  assert.equal(validateWizardStep(1, { ...values, description: '' }, [], config).productErrors.description, 'Add a short description.');
+  assert.ok(validateWizardStep(3, values, [{ ...choiceGroup(), values: [{ ...choiceGroup().values[0], swatch: '#FFF' }] }], config).configErrors.length > 0);
+  assert.ok(validateWizardStep(4, values, [], { ...config, enabled: true }).configErrors.length > 0);
+});
+
+test('save planner inserts hidden, uploads in order, and only publishes after photos', () => {
+  assert.deepEqual(planProductSave(2, true, true), {
+    actions: [
+      { type: 'insert-hidden' },
+      { type: 'upload-photo', position: 1 },
+      { type: 'upload-photo', position: 2 },
+      { type: 'publish', featured: true },
+    ],
+    remainsHiddenOnPhotoFailure: true,
+    removeEarlierPhotosOnFailure: true,
+  });
+  assert.deepEqual(planProductSave(0, false, false).actions, [{ type: 'insert-hidden' }]);
+  assert.deepEqual(planProductSave(1, true, false).actions, [
+    { type: 'insert-hidden' },
+    { type: 'upload-photo', position: 1 },
+    { type: 'publish', featured: false },
+  ]);
+  assert.equal(photoFailureNotice(2), 'Your product was saved as hidden but photo 2 did not upload. Add it here.');
 });

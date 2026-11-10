@@ -28,6 +28,7 @@ import {
 } from './admin-components';
 import {
   formatLagosDateTime,
+  formatReadableLagosDateTime,
   getPromoBannerStatus,
   getQualifyingPromoBanners,
   toLagosDateTimeInput,
@@ -216,19 +217,19 @@ function PromoBannerForm({
       <div className="admin-form-grid">
         <AdminSelect
           id={`promo-mode-${initial?.id ?? 'new'}`}
-          label="Banner mode"
+          label="Banner type"
           value={values.mode}
           onChange={(value) => {
             if (value === 'flyer' || value === 'message') change('mode', value);
           }}
           options={[
             { value: 'message', label: 'Message' },
-            { value: 'flyer', label: 'Flyer' },
+            { value: 'flyer', label: 'Flyer image' },
           ]}
         />
         <AdminSelect
           id={`promo-coupon-${initial?.id ?? 'new'}`}
-          label="Coupon link (optional)"
+          label="Attach a coupon (optional)"
           value={values.coupon_id}
           onChange={(value) => change('coupon_id', value)}
           options={couponOptions}
@@ -287,28 +288,30 @@ function PromoBannerForm({
 
       <AdminInput
         id={`promo-link-${initial?.id ?? 'new'}`}
-        label="Link URL (optional)"
+        label="Where should it go when tapped? (optional)"
         value={values.link_url}
         onChange={(value) => change('link_url', value)}
         error={errors.link_url}
-        hint="Use /, a path beginning with one /, or a full https:// URL."
+        hint="For example /shop or a full website address"
       />
       <div className="admin-form-grid">
         <AdminInput
           id={`promo-start-${initial?.id ?? 'new'}`}
-          label="Starts at (Africa/Lagos, optional)"
+          label="Starts at (optional)"
           type="datetime-local"
           value={values.starts_at}
           onChange={(value) => change('starts_at', value)}
           error={errors.starts_at}
+          hint={formatReadableLagosDateTime(toLagosIso(values.starts_at), 'Starts')}
         />
         <AdminInput
           id={`promo-end-${initial?.id ?? 'new'}`}
-          label="Ends at (Africa/Lagos, optional)"
+          label="Ends at (optional)"
           type="datetime-local"
           value={values.ends_at}
           onChange={(value) => change('ends_at', value)}
           error={errors.ends_at}
+          hint={formatReadableLagosDateTime(toLagosIso(values.ends_at), 'Ends')}
         />
       </div>
       <AdminToggle
@@ -319,7 +322,7 @@ function PromoBannerForm({
       />
 
       <div className="admin-promo-preview-wrap">
-        <span className="admin-field-label">Live preview</span>
+        <span className="admin-field-label">Preview</span>
         <div className={`admin-promo-preview ${values.mode === 'flyer' ? 'is-flyer' : 'is-message'}`}>
           {values.mode === 'flyer' ? (
             previewImage ? (
@@ -422,21 +425,19 @@ export function PromotionsPage() {
     <div className="admin-page">
       <AdminPageHeader
         title="Promotions"
-        description="Manage message banners and flyers shown by the storefront."
+        description="Manage banners shown on your website."
       />
 
       <AdminCard>
-        <h2>Showing on the storefront right now</h2>
+        <h2>Showing on your website right now</h2>
         {currentBanner ? (
           <ActiveBannerContents banner={currentBanner} />
         ) : (
-          <EmptyState>Nothing is being shown right now.</EmptyState>
+          <EmptyState>No banner is showing right now.</EmptyState>
         )}
         {qualifyingBanners.length > 1 && (
           <p className="admin-note" role="status">
-            {qualifyingBanners.length} banners qualify, but only one is shown at a time. The database
-            function chooses the newest qualifying banner by created date (created_at DESC).
-            {currentBanner && ` The current winner is ${currentBanner.title || currentBanner.mode} (${currentBanner.id}).`}
+            {qualifyingBanners.length} banners can show, but only one appears at a time.
           </p>
         )}
       </AdminCard>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import {
   addSubcategory,
@@ -6,7 +6,9 @@ import {
   deleteSubcategoryIfEmpty,
   listCategories,
   listDeliveryAreas,
+  removeCategoryImage,
   saveDeliveryArea,
+  uploadCategoryImage,
   updateCategory,
   updateSubcategory,
   type CategoryAdminRow,
@@ -25,7 +27,8 @@ import {
   EmptyState,
   LoadingState,
 } from './admin-components';
-import { formatNaira, parseWholeNumber, slugify } from './helpers';
+import { formatNaira, parseWholeNumber } from './helpers';
+import { resizeProductPhoto } from './image-helpers';
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
@@ -56,28 +59,58 @@ function CategoryEditor({ row, onRefresh }: {
 }) {
   const [name, setName] = useState(row.category.name);
   const [imagePath, setImagePath] = useState(row.category.image_path);
+  const [photo, setPhoto] = useState<File | null>(null);
   const [sortOrder, setSortOrder] = useState(String(row.category.sort_order));
   const [active, setActive] = useState(row.category.is_active);
   const [saving, setSaving] = useState(false);
+  const changePhotoInput = useRef<HTMLInputElement>(null);
+  const takePhotoInput = useRef<HTMLInputElement>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!photo) {
+      setPhotoPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(photo);
+    setPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photo]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const order = parseWholeNumber(sortOrder, { allowNegative: true });
-    if (!name.trim() || !imagePath.trim() || order === null) {
-      toast.error('Enter a name, image path, and whole-number sort order.');
+    if (!name.trim() || (!imagePath.trim() && !photo) || order === null) {
+      toast.error('Enter a name, choose a photo, and enter a position.');
       return;
     }
     setSaving(true);
+    let uploadedPath: string | null = null;
+    let categorySaved = false;
     try {
+      let nextImagePath = imagePath.trim();
+      if (photo) {
+        const resized = await resizeProductPhoto(photo);
+        const uploaded = await uploadCategoryImage(row.category.id, resized);
+        uploadedPath = uploaded.storagePath;
+        nextImagePath = uploaded.publicUrl;
+      }
       await updateCategory(row.category.id, {
         name: name.trim(),
-        image_path: imagePath.trim(),
+        image_path: nextImagePath,
         sort_order: order,
         is_active: active,
       });
+      categorySaved = true;
+      if (uploadedPath) {
+        await removeCategoryImage(imagePath);
+        setImagePath(nextImagePath);
+        setPhoto(null);
+      }
       toast.success('Category saved.');
       await onRefresh();
     } catch (error) {
+      if (uploadedPath && !categorySaved) await removeCategoryImage(uploadedPath);
       toast.error(errorText(error));
     } finally {
       setSaving(false);
@@ -96,8 +129,39 @@ function CategoryEditor({ row, onRefresh }: {
         </div>
         <div className="admin-form-grid">
           <AdminInput id={`category-name-${row.category.id}`} label="Category name" value={name} onChange={setName} required />
-          <AdminInput id={`category-image-${row.category.id}`} label="Image path" value={imagePath} onChange={setImagePath} required />
-          <AdminNumberInput id={`category-order-${row.category.id}`} label="Sort order" value={sortOrder} onChange={setSortOrder} required />
+          <div className="admin-category-photo-field">
+            <span className="admin-field-label">Photo</span>
+            <img className="admin-category-thumbnail" src={photoPreview ?? imagePath} alt={row.category.name} />
+            <input
+              ref={changePhotoInput}
+              className="admin-visually-hidden"
+              type="file"
+              tabIndex={-1}
+              aria-hidden="true"
+              accept="image/jpeg,image/png,image/webp"
+              disabled={saving}
+              onChange={(event) => setPhoto(event.currentTarget.files?.[0] ?? null)}
+            />
+            <input
+              ref={takePhotoInput}
+              className="admin-visually-hidden"
+              type="file"
+              tabIndex={-1}
+              aria-hidden="true"
+              accept="image/jpeg,image/png,image/webp"
+              disabled={saving}
+              onChange={(event) => setPhoto(event.currentTarget.files?.[0] ?? null)}
+            />
+            <div className="admin-form-actions">
+              <AdminButton type="button" variant="secondary" onClick={() => changePhotoInput.current?.click()}>
+                Change photo
+              </AdminButton>
+              <AdminButton type="button" variant="secondary" onClick={() => takePhotoInput.current?.click()}>
+                Take a photo
+              </AdminButton>
+            </div>
+          </div>
+          <AdminNumberInput id={`category-order-${row.category.id}`} label="Position in list" value={sortOrder} onChange={setSortOrder} required />
         </div>
         <div className="admin-form-actions">
           <AdminButton type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save category'}</AdminButton>
@@ -170,7 +234,7 @@ function SubcategoryEditor({ row, onRefresh }: {
     <form className="admin-subcategory-row" onSubmit={(event) => void save(event)}>
       <div className="admin-form-grid">
         <AdminInput id={`subcategory-name-${subcategory.id}`} label="Name" value={name} onChange={setName} required />
-        <AdminNumberInput id={`subcategory-order-${subcategory.id}`} label="Sort order" value={sortOrder} onChange={setSortOrder} required />
+        <AdminNumberInput id={`subcategory-order-${subcategory.id}`} label="Position in list" value={sortOrder} onChange={setSortOrder} required />
         <AdminToggle id={`subcategory-active-${subcategory.id}`} label={active ? 'Active' : 'Hidden'} checked={active} onChange={setActive} />
       </div>
       <div className="admin-form-actions">
@@ -201,21 +265,14 @@ function NewSubcategory({ categoryId, onRefresh }: {
   onRefresh: () => Promise<void>;
 }) {
   const [name, setName] = useState('');
-  const [slug, setSlug] = useState('');
-  const [slugEdited, setSlugEdited] = useState(false);
   const [sortOrder, setSortOrder] = useState('0');
   const [saving, setSaving] = useState(false);
-
-  const changeName = (value: string) => {
-    setName(value);
-    if (!slugEdited) setSlug(slugify(value));
-  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const order = parseWholeNumber(sortOrder, { allowNegative: true });
-    if (!name.trim() || !slugify(slug) || order === null) {
-      toast.error('Enter a name, valid slug, and whole-number sort order.');
+    if (!name.trim() || order === null) {
+      toast.error('Enter a name and a position.');
       return;
     }
     setSaving(true);
@@ -223,14 +280,11 @@ function NewSubcategory({ categoryId, onRefresh }: {
       await addSubcategory({
         category_id: categoryId,
         name: name.trim(),
-        slug: slugify(slug),
         sort_order: order,
         is_active: true,
       });
       toast.success('Subcategory added.');
       setName('');
-      setSlug('');
-      setSlugEdited(false);
       setSortOrder('0');
       await onRefresh();
     } catch (error) {
@@ -243,20 +297,9 @@ function NewSubcategory({ categoryId, onRefresh }: {
   return (
     <form className="admin-new-subcategory" onSubmit={(event) => void submit(event)}>
       <h4>Add a subcategory</h4>
-      <div className="admin-form-grid">
-        <AdminInput id={`new-subcategory-name-${categoryId}`} label="Name" value={name} onChange={changeName} required />
-        <AdminInput
-          id={`new-subcategory-slug-${categoryId}`}
-          label="Slug"
-          value={slug}
-          onChange={(value) => {
-            setSlug(value);
-            setSlugEdited(true);
-          }}
-          required
-          hint="Generated from the name; editable only before creation."
-        />
-        <AdminNumberInput id={`new-subcategory-order-${categoryId}`} label="Sort order" value={sortOrder} onChange={setSortOrder} required />
+      <div className="admin-form-grid admin-subcategory-create-grid">
+        <AdminInput id={`new-subcategory-name-${categoryId}`} label="Name" value={name} onChange={setName} required />
+        <AdminNumberInput id={`new-subcategory-order-${categoryId}`} label="Position in list" value={sortOrder} onChange={setSortOrder} required />
       </div>
       <AdminButton type="submit" disabled={saving || !name.trim()}>{saving ? 'Adding…' : 'Add subcategory'}</AdminButton>
     </form>
@@ -268,7 +311,7 @@ export function CategoriesPage() {
 
   return (
     <div className="admin-page">
-      <AdminPageHeader title="Categories" description="Manage the storefront categories and their subcategories." />
+      <AdminPageHeader title="Categories" description="Manage the website categories and their subcategories." />
       {loading && !rows ? <LoadingState label="Loading categories…" /> : null}
       {rows?.length === 0 && <EmptyState>No categories found.</EmptyState>}
       {rows?.map((row) => (
@@ -324,8 +367,8 @@ function DeliveryAreaForm({ initial, onSave, onCancel }: {
     <form className="admin-form" onSubmit={(event) => void submit(event)}>
       <div className="admin-form-grid">
         <AdminInput id={`delivery-name-${initial?.id ?? 'new'}`} label="Area name" value={name} onChange={setName} required />
-        <AdminNairaInput id={`delivery-fee-${initial?.id ?? 'new'}`} label="Delivery fee" value={fee} onChange={setFee} required />
-        <AdminNumberInput id={`delivery-order-${initial?.id ?? 'new'}`} label="Sort order" value={sortOrder} onChange={setSortOrder} required />
+        <AdminNairaInput id={`delivery-fee-${initial?.id ?? 'new'}`} label="Delivery fee (₦)" value={fee} onChange={setFee} required />
+        <AdminNumberInput id={`delivery-order-${initial?.id ?? 'new'}`} label="Position in list" value={sortOrder} onChange={setSortOrder} required />
         <AdminToggle id={`delivery-active-${initial?.id ?? 'new'}`} label={active ? 'Active' : 'Inactive'} checked={active} onChange={setActive} />
       </div>
       <div className="admin-form-actions">
@@ -371,7 +414,6 @@ export function DeliveryPage() {
     <div className="admin-page">
       <AdminPageHeader title="Delivery areas" description="Manage delivery names, fees, visibility and ordering." />
       <AdminCard>
-        <p className="admin-note"><strong>Pickup is always free.</strong> Pickup is a separate fulfilment option and is not managed here.</p>
         <DeliveryAreaForm initial={null} onSave={save} />
       </AdminCard>
       {loading && !areas ? <LoadingState label="Loading delivery areas…" /> : null}

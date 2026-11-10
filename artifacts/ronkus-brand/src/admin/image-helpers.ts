@@ -39,7 +39,7 @@ export async function resizeProductPhoto(file: File): Promise<File> {
     throw new Error('This image has invalid dimensions. Choose a different photo.');
   }
 
-  const scale = Math.min(1, 1600 / Math.max(width, height));
+  const scale = Math.min(1, 1280 / Math.max(width, height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(width * scale));
   canvas.height = Math.max(1, Math.round(height * scale));
@@ -54,16 +54,14 @@ export async function resizeProductPhoto(file: File): Promise<File> {
   const toBlob = (type: string): Promise<Blob | null> => new Promise((resolve) => {
     canvas.toBlob(resolve, type, 0.85);
   });
-  let blob = await toBlob('image/webp');
-  if (!blob || blob.type !== 'image/webp') blob = await toBlob('image/jpeg');
-  if (!blob || blob.type !== 'image/jpeg' && blob.type !== 'image/webp') {
-    throw new Error('This photo could not be converted to a supported format.');
+  const blob = await toBlob('image/webp');
+  if (!blob || blob.type !== 'image/webp') {
+    throw new Error('This photo could not be saved as WebP. Try another photo or browser.');
   }
   if (blob.size >= 5 * 1024 * 1024) {
     throw new Error('The resized photo is still too large. Choose a smaller image.');
   }
 
-  const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
   const filenameBase = safeProductImageFilename(file.name).replace(/\.[^.]+$/, '');
-  return new File([blob], `${filenameBase}.${extension}`, { type: blob.type, lastModified: Date.now() });
+  return new File([blob], `${filenameBase}.webp`, { type: blob.type, lastModified: Date.now() });
 }

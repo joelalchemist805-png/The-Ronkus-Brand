@@ -82,7 +82,7 @@ export function isOrderAbandoned(createdAt: string, now: number | Date = Date.no
 }
 
 export function getAwaitingPaymentLabel(createdAt: string, now: number | Date = Date.now()): string {
-  return isOrderAbandoned(createdAt, now) ? 'Abandoned' : 'Awaiting payment';
+  return isOrderAbandoned(createdAt, now) ? 'Not paid' : 'Waiting for payment';
 }
 
 export function getLagosDateRange(

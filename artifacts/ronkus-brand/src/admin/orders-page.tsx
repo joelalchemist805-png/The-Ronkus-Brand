@@ -73,7 +73,7 @@ const initialFilters: Filters = {
 
 const tabs: { value: OrderTab; label: string }[] = [
   { value: 'todo', label: 'To do' },
-  { value: 'awaiting_payment', label: 'Awaiting payment' },
+  { value: 'awaiting_payment', label: 'Waiting for payment' },
   { value: 'all', label: 'All' },
 ];
 
@@ -87,12 +87,12 @@ const statuses: OrderStatus[] = [
 ];
 
 const statusLabels: Record<OrderStatus, string> = {
-  pending: 'Pending',
-  paid: 'Paid',
+  pending: 'Waiting for payment',
+  paid: 'Paid (new)',
   preparing: 'Preparing',
-  delivering: 'Delivering',
+  delivering: 'On the way',
   delivered: 'Delivered',
-  canceled: 'Canceled',
+  canceled: 'Cancelled',
 };
 
 const paymentLabels: Record<OrderPaymentStatus, string> = {
@@ -418,7 +418,7 @@ function OrdersListPage({
           />
           <AdminSelect
             id="orders-date-preset"
-            label="Date range (Lagos)"
+            label="Date range"
             value={filters.datePreset}
             onChange={(value) => {
               updateFilter('datePreset', value as OrderDatePreset);
@@ -714,25 +714,24 @@ function OrderDetailPage({
         <div className="admin-card-heading">
           <div>
             <h2>Order status</h2>
-            <p>Payment status is read-only and is updated by the payment system.</p>
           </div>
         </div>
         {paymentMismatch && (
           <div className="admin-alert orders-warning" role="alert">
             <AlertTriangle size={18} aria-hidden="true" />
-            This order is marked paid, but its payment status is not paid. All status actions except cancellation are disabled.
+            Payment does not match this order. You can only cancel it.
           </div>
         )}
         {order.order_status === 'pending' && (
           <p className="admin-note orders-awaiting-note">
-            Awaiting payment. Do not prepare or deliver this order until payment is confirmed.
+            Payment is not confirmed. Wait before preparing or sending this order.
           </p>
         )}
         {(order.order_status === 'delivered' || order.order_status === 'canceled') && (
           <p className="admin-note">
             {order.order_status === 'delivered'
-              ? 'This order is delivered and final; no further status actions are available.'
-              : 'This order is canceled and final; no further status actions are available.'}
+            ? 'This order is complete.'
+            : 'This order was cancelled.'}
           </p>
         )}
         {order.order_status !== 'delivered' && order.order_status !== 'canceled' && (
@@ -880,7 +879,6 @@ function OrderDetailPage({
 
       <AdminCard>
         <h2>Status history</h2>
-        <p className="admin-inline-note">The initial status at order creation is not recorded in this timeline.</p>
         {history.length === 0 ? <EmptyState>No status changes recorded.</EmptyState> : (
           <ol className="orders-timeline">
             {history.map((entry) => (

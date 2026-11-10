@@ -81,6 +81,17 @@ export type CustomOrderDraft = {
   fields: CustomFieldDraft[];
 };
 
+export type ProductConfigurationDraftWrite = {
+  options: ProductOptionGroup[];
+  custom_request_enabled: boolean;
+  custom_request_button_label: string;
+  custom_request_flow: CustomOrderDraft['flow'];
+  custom_request_fee_ngn: number;
+  custom_request_notice: string | null;
+  needed_by_mode: CustomOrderDraft['needed_by_mode'];
+  custom_request_fields: CustomRequestField[];
+};
+
 export type ProductConfigIssue = {
   path: string;
   message: string;
@@ -268,6 +279,22 @@ export function customFieldFromDraft(field: CustomFieldDraft): CustomRequestFiel
   throw new Error('Unsupported custom-request field type.');
 }
 
+export function productConfigurationFromDraft(
+  options: OptionGroupDraft[],
+  customOrder: CustomOrderDraft,
+): ProductConfigurationDraftWrite {
+  return {
+    options: options.map(optionGroupFromDraft),
+    custom_request_enabled: customOrder.enabled,
+    custom_request_button_label: customOrder.button_label.trim(),
+    custom_request_flow: customOrder.flow,
+    custom_request_fee_ngn: Number(customOrder.fee_ngn),
+    custom_request_notice: customOrder.notice.trim() || null,
+    needed_by_mode: customOrder.needed_by_mode,
+    custom_request_fields: customOrder.fields.map(customFieldFromDraft),
+  };
+}
+
 function validateIds(
   entries: { id: string; label: string }[],
   path: string,
@@ -276,7 +303,7 @@ function validateIds(
   const ids = new Set<string>();
   entries.forEach((entry, index) => {
     if (!slugPattern.test(entry.id) || ids.has(entry.id)) {
-      issues.push({ path: `${path}.${index}.id`, message: 'Use a unique lowercase slug with hyphens.' });
+      issues.push({ path: `${path}.${index}.id`, message: 'Use a short name with lowercase letters, numbers, and hyphens.' });
     }
     if (!entry.label.trim()) {
       issues.push({ path: `${path}.${index}.label`, message: 'Enter a label.' });
@@ -336,7 +363,7 @@ export function validateProductOptions(groups: OptionGroupDraft[]): ProductConfi
       group.values.forEach((value, valueIndex) => {
         const valuePath = `${path}.values.${valueIndex}`;
         if (!value.value.trim() || values.has(value.value)) {
-          issues.push({ path: `${valuePath}.value`, message: 'Enter a non-empty, unique stored value.' });
+          issues.push({ path: `${valuePath}.value`, message: 'Enter a different value for each choice.' });
         }
         values.add(value.value);
         if (!value.label.trim()) issues.push({ path: `${valuePath}.label`, message: 'Enter a choice label.' });
